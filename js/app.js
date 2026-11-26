@@ -406,26 +406,36 @@
         islands: { x: gap, y: gap + (boxH + gap) * 3, w: insetW, h: islandH },
       };
     }
-    let islandH = Math.round(Math.min(120, Math.max(44, height * 0.18)));
-    let insetH = Math.round(Math.min(150, Math.max(52, height * 0.22)));
-    const chrome = islandH + insetH + gap * 3;
-    if (chrome > height * 0.58) {
-      const scale = (height * 0.5) / chrome;
-      islandH = Math.max(36, Math.round(islandH * scale));
-      insetH = Math.max(40, Math.round(insetH * scale));
-    }
-    const boxW = (width - gap * 4) / 3;
-    const islandsY = height - islandH - gap;
-    const countyY = islandsY - gap - insetH;
+    const insetW = Math.round(Math.min(112, Math.max(84, width * 0.24)));
+    const innerH = height - gap * 2;
+    const band = (innerH - gap * 5) / 6;
+    const stack = [
+      { key: "penghu", name: "澎湖縣" },
+      { key: "kinmen", name: "金門縣" },
+      { key: "lienchiang", name: "連江縣" },
+    ];
     return {
       wide: false,
-      main: { x: gap, y: gap, w: width - gap * 2, h: Math.max(40, countyY - gap * 2) },
-      insets: [
-        { key: "penghu", name: "澎湖縣", x: gap, y: countyY, w: boxW, h: insetH },
-        { key: "kinmen", name: "金門縣", x: gap * 2 + boxW, y: countyY, w: boxW, h: insetH },
-        { key: "lienchiang", name: "連江縣", x: gap * 3 + boxW * 2, y: countyY, w: boxW, h: insetH },
-      ],
-      islands: { x: gap, y: islandsY, w: width - gap * 2, h: islandH },
+      main: {
+        x: gap * 2 + insetW,
+        y: gap,
+        w: Math.max(40, width - insetW - gap * 3),
+        h: height - gap * 2,
+      },
+      insets: stack.map((item, index) => ({
+        key: item.key,
+        name: item.name,
+        x: gap,
+        y: gap + (band + gap) * index,
+        w: insetW,
+        h: band,
+      })),
+      islands: {
+        x: gap,
+        y: gap + (band + gap) * 3,
+        w: insetW,
+        h: band * 3 + gap * 2,
+      },
     };
   }
 
@@ -460,7 +470,19 @@
       { key: "ludao", name: "綠島" },
       { key: "lanyu", name: "蘭嶼" },
     ];
-    const gap = Math.max(4, Math.min(8, box.w * 0.02));
+    const vertical = box.h > box.w * 1.15;
+    const gap = Math.max(4, Math.min(8, Math.min(box.w, box.h) * 0.03));
+    if (vertical) {
+      const cellH = (box.h - gap * (specs.length - 1)) / specs.length;
+      return specs.map((spec, index) => ({
+        key: spec.key,
+        name: spec.name,
+        x: box.x,
+        y: box.y + index * (cellH + gap),
+        w: box.w,
+        h: cellH,
+      }));
+    }
     const cellW = (box.w - gap * (specs.length - 1)) / specs.length;
     return specs.map((spec, index) => ({
       key: spec.key,

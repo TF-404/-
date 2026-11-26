@@ -561,11 +561,15 @@ body {
   }
 
   .draw {
-    height: 58px;
-    min-height: 58px;
-    max-height: 58px;
-    font-size: 1.35rem;
-    border-radius: 14px;
+    width: auto;
+    align-self: center;
+    height: 44px;
+    min-height: 44px;
+    max-height: 44px;
+    padding: 0 22px;
+    font-size: 1.05rem;
+    letter-spacing: 0.08em;
+    border-radius: 12px;
   }
 
   .controls { margin-top: 10px; }

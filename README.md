@@ -1,6 +1,6 @@
 # 臺灣縣市抽獎
 
-靜態網頁，由 GitHub Pages 從 `main` 分支根目錄提供：<https://tf-404.github.io/>
+靜態網頁，由 GitHub Pages 從 `main` 分支根目錄提供：<https://tf-404.github.io/taiwan-map-lottery/>
 
 地圖畫出臺灣二十二個縣市，另外把小琉球、綠島、蘭嶼拆成獨立的籤，一共二十五個。按下「抽獎」後，白色光框會在它們之間隨機跳動，先快後慢，約十一秒後停在以 `crypto.getRandomValues` 均等抽出的一籤。
 
