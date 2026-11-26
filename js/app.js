@@ -46,8 +46,11 @@
     臺東縣: [8, 4],
   };
 
-  const SPIN_MS = 5400;
-  const SPIN_MS_REDUCED = 420;
+  const SPIN_MS = 11200;
+  const SPIN_MS_REDUCED = 480;
+  const SPIN_HOPS = 30;
+  const SPIN_EASE = 3.25;
+  const SPIN_LINEAR = 0.15;
 
   const mapEl = document.getElementById("map");
   const statusEl = document.getElementById("status");
@@ -71,7 +74,9 @@
     width: 0,
     height: 0,
     svg: null,
-    spotlight: null,
+    spots: null,
+    spotIndex: 0,
+    renderDeferred: false,
     nodes: new Map(),
     renderQueued: false,
     paths: null,
@@ -550,7 +555,6 @@
       role: "img",
       "aria-label": "臺灣二十二縣市地圖",
     });
-    svg.style.setProperty("--spot", (Math.max(4.5, Math.min(7, Math.min(width, height) / 150))).toFixed(2) + "px");
     if (state.spinning) svg.classList.add("is-spinning");
 
     const defs = el("defs", null, svg);
@@ -697,21 +701,76 @@
       nodes.get(county.id).label = label;
     });
 
-    const spotlight = el("path", { class: "spotlight" }, svg);
-    spotlight.style.display = "none";
+    state.spots = [createSpot(svg), createSpot(svg)];
+    state.spotIndex = 0;
 
     mapEl.replaceChildren(svg);
     state.svg = svg;
-    state.spotlight = spotlight;
     state.nodes = nodes;
-    applyVisualState();
+    applyCountyStyles();
+    if (state.frameId) paintFrame(state.frameId, 0);
+  }
+
+  function createSpot(parent) {
+    const g = el("g", { class: "spotlight no-fade" }, parent);
+    const glow = el("path", { class: "spot-glow" }, g);
+    const core = el("path", { class: "spot-core" }, g);
+    return { g, glow, core };
+  }
+
+  function paintFrame(id, fadeMs) {
+    if (!state.spots) return;
+    const county = id ? state.counties.find((item) => item.id === id) : null;
+    const d = county && county.d ? county.d : "";
+    if (!d) {
+      state.spots.forEach((spot) => {
+        spot.g.classList.remove("is-shown");
+        spot.glow.setAttribute("d", "");
+        spot.core.setAttribute("d", "");
+      });
+      return;
+    }
+    const nextIndex = state.spotIndex ^ 1;
+    const next = state.spots[nextIndex];
+    const prev = state.spots[state.spotIndex];
+    next.glow.setAttribute("d", d);
+    next.core.setAttribute("d", d);
+    const fade = fadeMs > 0;
+    if (!fade) {
+      next.g.classList.add("no-fade");
+      prev.g.classList.add("no-fade");
+      next.g.style.transitionDuration = "0ms";
+      prev.g.style.transitionDuration = "0ms";
+      next.g.classList.add("is-shown");
+      prev.g.classList.remove("is-shown");
+    } else {
+      next.g.classList.add("no-fade");
+      next.g.classList.remove("is-shown");
+      next.g.style.transitionDuration = "0ms";
+      void next.core.getBoundingClientRect();
+      next.g.style.transitionDuration = fadeMs + "ms";
+      prev.g.style.transitionDuration = fadeMs + "ms";
+      next.g.classList.remove("no-fade");
+      prev.g.classList.remove("no-fade");
+      next.g.classList.add("is-shown");
+      prev.g.classList.remove("is-shown");
+    }
+    state.spotIndex = nextIndex;
   }
 
   function scheduleRender() {
+    if (state.spinning) {
+      state.renderDeferred = true;
+      return;
+    }
     if (state.renderQueued) return;
     state.renderQueued = true;
     requestAnimationFrame(() => {
       state.renderQueued = false;
+      if (state.spinning) {
+        state.renderDeferred = true;
+        return;
+      }
       const rect = mapEl.getBoundingClientRect();
       const width = Math.floor(rect.width);
       const height = Math.floor(rect.height);
@@ -729,30 +788,27 @@
     return state.counties.filter((county) => !drawn.has(county.id));
   }
 
-  function applyVisualState() {
+  function applyCountyStyles() {
     const drawn = new Set(state.history.map((item) => item.id));
     state.counties.forEach((county) => {
       const node = state.nodes.get(county.id);
       if (!node) return;
       const isWinner = state.winnerId === county.id;
-      const isHot = state.spinning && state.frameId === county.id;
       const spent = norepeat.checked && drawn.has(county.id) && !isWinner;
       node.path.classList.toggle("is-winner", isWinner);
-      node.path.classList.toggle("is-hot", isHot);
       node.path.classList.toggle("is-spent", spent);
       node.label.classList.toggle("is-spent", spent);
-      const fill = isWinner ? county.hot : isHot ? county.warm : county.color;
-      node.path.setAttribute("fill", fill);
+      node.path.setAttribute("fill", isWinner ? county.hot : county.color);
     });
     if (state.svg) state.svg.classList.toggle("is-spinning", state.spinning);
-    const framed = state.counties.find((county) => county.id === state.frameId);
-    if (framed && framed.d && state.spotlight) {
-      state.spotlight.setAttribute("d", framed.d);
-      state.spotlight.style.display = "";
-    } else if (state.spotlight) {
-      state.spotlight.removeAttribute("d");
-      state.spotlight.style.display = "none";
-    }
+  }
+
+  function setDrawFace(face) {
+    drawBtn.querySelectorAll(".draw-face").forEach((el) => {
+      const on = el.getAttribute("data-face") === face;
+      el.classList.toggle("is-on", on);
+      el.toggleAttribute("aria-hidden", !on);
+    });
   }
 
   function syncControls() {
@@ -761,10 +817,10 @@
     drawBtn.disabled = blocked || !state.counties.length;
     resetBtn.disabled = state.spinning || state.history.length === 0;
     norepeat.disabled = state.spinning;
-    if (state.spinning) drawBtn.textContent = "抽籤中…";
-    else if (eligible.length === 0) drawBtn.textContent = "已抽完";
-    else if (state.history.length) drawBtn.textContent = "再抽一次";
-    else drawBtn.textContent = "抽獎";
+    if (state.spinning) setDrawFace("spin");
+    else if (eligible.length === 0) setDrawFace("done");
+    else if (state.history.length) setDrawFace("again");
+    else setDrawFace("idle");
     if (norepeat.checked && eligible.length === 0) {
       hint.textContent = "二十二個縣市都已抽出";
     } else if (norepeat.checked) {
@@ -801,7 +857,6 @@
   }
 
   function hideBanner() {
-    banner.hidden = true;
     banner.classList.remove("is-on");
     bannerText.textContent = "";
     fx.classList.remove("go");
@@ -810,9 +865,6 @@
 
   function showBanner(name) {
     bannerText.textContent = "抽中：" + name;
-    banner.hidden = false;
-    banner.classList.remove("is-on");
-    void banner.offsetWidth;
     banner.classList.add("is-on");
   }
 
@@ -837,26 +889,33 @@
     fx.classList.add("go");
   }
 
-  function makeDelays(totalMs) {
-    const delays = [];
-    let elapsed = 0;
-    let gap = 58;
-    while (elapsed + gap < totalMs) {
-      const rounded = Math.round(gap);
-      delays.push(rounded);
-      elapsed += rounded;
-      gap = gap * 1.105 + 3.2;
+  function spinSchedule(totalMs) {
+    const times = [];
+    const count = motionQuery.matches ? 6 : SPIN_HOPS;
+    const ease = motionQuery.matches ? 1.4 : SPIN_EASE;
+    const linear = motionQuery.matches ? 0.5 : SPIN_LINEAR;
+    for (let i = 0; i < count; i += 1) {
+      const p = count === 1 ? 1 : i / (count - 1);
+      const shaped = (linear * p) + ((1 - linear) * Math.pow(p, ease));
+      times.push(totalMs * shaped);
     }
-    return delays;
+    times[0] = 0;
+    times[times.length - 1] = totalMs;
+    return times;
+  }
+
+  function fadeForGap(gap) {
+    if (motionQuery.matches || gap < 280) return 0;
+    return Math.min(200, Math.round(gap * 0.2));
   }
 
   function buildHops(eligible, winner) {
     const total = motionQuery.matches ? SPIN_MS_REDUCED : SPIN_MS;
-    const delays = makeDelays(total);
+    const times = spinSchedule(total);
     const hops = [];
     let previous = null;
-    delays.forEach((delay, index) => {
-      const last = index === delays.length - 1;
+    for (let i = 0; i < times.length - 1; i += 1) {
+      const last = i === times.length - 2;
       let id = winner.id;
       if (eligible.length > 1) {
         let guard = 0;
@@ -865,10 +924,12 @@
           guard += 1;
         } while (guard < 12 && (id === previous || (last && id === winner.id)));
       }
-      hops.push({ id, delay });
+      const gap = i === 0 ? 0 : times[i] - times[i - 1];
+      hops.push({ id, at: times[i], fade: fadeForGap(gap) });
       previous = id;
-    });
-    hops.push({ id: winner.id, delay: 0 });
+    }
+    const landGap = times[times.length - 1] - times[times.length - 2];
+    hops.push({ id: winner.id, at: times[times.length - 1], fade: fadeForGap(landGap) });
     return hops;
   }
 
@@ -882,24 +943,36 @@
     }
     state.spinning = true;
     state.winnerId = null;
+    applyCountyStyles();
     syncControls();
     hideBanner();
     const winner = eligible[randomIndex(eligible.length)];
     const hops = buildHops(eligible, winner);
-    for (let i = 0; i < hops.length; i += 1) {
-      state.frameId = hops[i].id;
-      applyVisualState();
-      if (hops[i].delay > 0) await sleep(hops[i].delay);
+    const started = performance.now();
+    let shown = -1;
+    while (shown < hops.length - 1) {
+      const elapsed = performance.now() - started;
+      while (shown + 1 < hops.length && hops[shown + 1].at <= elapsed + 1) {
+        shown += 1;
+        state.frameId = hops[shown].id;
+        paintFrame(hops[shown].id, hops[shown].fade);
+      }
+      if (shown >= hops.length - 1) break;
+      await sleep(Math.min(70, Math.max(12, hops[shown + 1].at - elapsed)));
     }
     state.spinning = false;
     state.winnerId = winner.id;
     state.frameId = winner.id;
     state.history.push({ id: winner.id, name: winner.name, color: winner.color });
-    applyVisualState();
+    applyCountyStyles();
     showBanner(winner.name);
     celebrate();
     renderHistory();
     syncControls();
+    if (state.renderDeferred) {
+      state.renderDeferred = false;
+      scheduleRender();
+    }
   }
 
   function resetAll() {
@@ -908,7 +981,8 @@
     state.winnerId = null;
     state.frameId = null;
     hideBanner();
-    applyVisualState();
+    paintFrame(null, 0);
+    applyCountyStyles();
     renderHistory();
     syncControls();
   }
@@ -934,13 +1008,14 @@
     spin().catch((error) => {
       console.error(error);
       state.spinning = false;
+      applyCountyStyles();
       syncControls();
       hint.textContent = "抽獎沒有完成，請再試一次";
     });
   });
   resetBtn.addEventListener("click", resetAll);
   norepeat.addEventListener("change", () => {
-    applyVisualState();
+    applyCountyStyles();
     syncControls();
   });
 
