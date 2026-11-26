@@ -46,11 +46,13 @@
     臺東縣: [8, 4],
   };
 
-  const SPIN_MS = 11200;
-  const SPIN_MS_REDUCED = 480;
-  const SPIN_HOPS = 30;
-  const SPIN_EASE = 3.25;
-  const SPIN_LINEAR = 0.15;
+  /* Dwell on each county, in ms, before the next hop. Always used,
+     including when the OS asks for reduced motion. The steps grow
+     so the slowdown is visible the whole way, and none is under a frame. */
+  const HOP_GAPS = [
+    70, 94, 120, 148, 178, 210, 244, 280, 318, 358, 400, 445,
+    492, 542, 595, 651, 710, 772, 838, 908, 982, 1060, 1144,
+  ];
 
   const mapEl = document.getElementById("map");
   const statusEl = document.getElementById("status");
@@ -889,47 +891,36 @@
     fx.classList.add("go");
   }
 
-  function spinSchedule(totalMs) {
-    const times = [];
-    const count = motionQuery.matches ? 6 : SPIN_HOPS;
-    const ease = motionQuery.matches ? 1.4 : SPIN_EASE;
-    const linear = motionQuery.matches ? 0.5 : SPIN_LINEAR;
-    for (let i = 0; i < count; i += 1) {
-      const p = count === 1 ? 1 : i / (count - 1);
-      const shaped = (linear * p) + ((1 - linear) * Math.pow(p, ease));
-      times.push(totalMs * shaped);
-    }
-    times[0] = 0;
-    times[times.length - 1] = totalMs;
-    return times;
-  }
-
   function fadeForGap(gap) {
-    if (motionQuery.matches || gap < 280) return 0;
-    return Math.min(200, Math.round(gap * 0.2));
+    if (gap < 280) return 0;
+    return Math.min(180, Math.round(gap * 0.16));
   }
 
   function buildHops(eligible, winner) {
-    const total = motionQuery.matches ? SPIN_MS_REDUCED : SPIN_MS;
-    const times = spinSchedule(total);
     const hops = [];
     let previous = null;
-    for (let i = 0; i < times.length - 1; i += 1) {
-      const last = i === times.length - 2;
+    HOP_GAPS.forEach((gap, index) => {
+      const beforeLand = index === HOP_GAPS.length - 1;
       let id = winner.id;
       if (eligible.length > 1) {
         let guard = 0;
         do {
           id = eligible[randomIndex(eligible.length)].id;
           guard += 1;
-        } while (guard < 12 && (id === previous || (last && id === winner.id)));
+        } while (guard < 16 && (id === previous || (beforeLand && id === winner.id)));
       }
-      const gap = i === 0 ? 0 : times[i] - times[i - 1];
-      hops.push({ id, at: times[i], fade: fadeForGap(gap) });
+      hops.push({
+        id,
+        gap,
+        fade: index === 0 ? 0 : fadeForGap(gap),
+      });
       previous = id;
-    }
-    const landGap = times[times.length - 1] - times[times.length - 2];
-    hops.push({ id: winner.id, at: times[times.length - 1], fade: fadeForGap(landGap) });
+    });
+    hops.push({
+      id: winner.id,
+      gap: 0,
+      fade: fadeForGap(HOP_GAPS[HOP_GAPS.length - 1]),
+    });
     return hops;
   }
 
@@ -948,17 +939,10 @@
     hideBanner();
     const winner = eligible[randomIndex(eligible.length)];
     const hops = buildHops(eligible, winner);
-    const started = performance.now();
-    let shown = -1;
-    while (shown < hops.length - 1) {
-      const elapsed = performance.now() - started;
-      while (shown + 1 < hops.length && hops[shown + 1].at <= elapsed + 1) {
-        shown += 1;
-        state.frameId = hops[shown].id;
-        paintFrame(hops[shown].id, hops[shown].fade);
-      }
-      if (shown >= hops.length - 1) break;
-      await sleep(Math.min(70, Math.max(12, hops[shown + 1].at - elapsed)));
+    for (let i = 0; i < hops.length; i += 1) {
+      state.frameId = hops[i].id;
+      paintFrame(hops[i].id, hops[i].fade);
+      if (hops[i].gap > 0) await sleep(hops[i].gap);
     }
     state.spinning = false;
     state.winnerId = winner.id;
