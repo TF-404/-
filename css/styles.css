@@ -73,15 +73,15 @@ body {
   align-items: center;
   justify-content: center;
   flex: none;
-  height: 80px;
-  min-height: 80px;
-  max-height: 80px;
+  height: 56px;
+  min-height: 56px;
+  max-height: 56px;
   padding: 0 18px;
   overflow: hidden;
   contain: layout paint;
-  font-size: clamp(1.8rem, 4vw, 3rem);
+  font-size: 1.75rem;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   color: #fff;
   text-shadow: 0 0 18px rgba(255, 255, 255, 0.55), 0 0 2px #fff;
   background: transparent;
@@ -539,10 +539,10 @@ body {
   .topbar p { display: none; }
 
   .banner {
-    height: 64px;
-    min-height: 64px;
-    max-height: 64px;
-    font-size: 1.7rem;
+    height: 48px;
+    min-height: 48px;
+    max-height: 48px;
+    font-size: 23px;
     letter-spacing: 0.04em;
     padding: 0 10px;
   }
