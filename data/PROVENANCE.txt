@@ -1,0 +1,10 @@
+counties-10t.json
+Source package: taiwan-atlas 2021.9.20
+https://github.com/dkaoster/taiwan-atlas
+https://cdn.jsdelivr.net/npm/taiwan-atlas@2021.9.20/counties-10t.json
+
+The file is an unmodified TopoJSON redistribution of the Taiwan Ministry of
+the Interior shapefile 直轄市、縣市界線 (TWD97 經緯度). Geometry is unprojected
+WGS84, quantized and topologically simplified by taiwan-atlas.
+
+License: MIT (see taiwan-atlas.LICENSE).

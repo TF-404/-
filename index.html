@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#070e18">
+  <meta name="description" content="從臺灣二十二個縣市中公平抽出一籤。">
+  <title>臺灣縣市抽獎</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23070e18'/%3E%3Ccircle cx='16' cy='16' r='8' fill='none' stroke='white' stroke-width='3'/%3E%3C/svg%3E">
+  <link rel="preload" href="vendor/fonts/noto-sans-tc-700.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>臺灣縣市抽獎</h1>
+    <p>二十二個縣市，機會均等</p>
+  </header>
+
+  <div id="banner" class="banner" hidden>
+    <span id="banner-text" role="status" aria-live="assertive"></span>
+    <div id="fx" class="fx" aria-hidden="true"></div>
+  </div>
+
+  <main class="layout">
+    <section class="map-wrap" aria-label="臺灣地圖">
+      <div id="map" class="map">
+        <p id="status" class="status">地圖載入中…</p>
+      </div>
+    </section>
+
+    <aside class="panel">
+      <button type="button" id="draw" class="draw" disabled>抽獎</button>
+
+      <div class="controls">
+        <label class="switch">
+          <input id="norepeat" type="checkbox" role="switch">
+          <span class="track" aria-hidden="true"><span class="thumb"></span></span>
+          <span class="switch-text">不重複抽</span>
+        </label>
+        <button type="button" id="reset" class="reset" disabled>重設</button>
+      </div>
+      <p id="hint" class="hint">每一輪都從全部縣市抽出</p>
+
+      <h2 class="history-title">抽獎紀錄</h2>
+      <ol id="history" class="history">
+        <li class="empty">尚無抽獎紀錄</li>
+      </ol>
+      <p class="credit">縣市界線：內政部資料，經 taiwan-atlas 整理</p>
+    </aside>
+  </main>
+
+  <script src="vendor/d3.min.js"></script>
+  <script src="vendor/topojson-client.min.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

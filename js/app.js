@@ -1,0 +1,951 @@
+/* Taiwan county lottery.
+   Boundaries: Ministry of the Interior via taiwan-atlas counties-10t.json.
+   d3 and topojson-client are vendored; this page has no runtime CDN use. */
+(function () {
+  "use strict";
+
+  const OFFICIAL = [
+    "基隆市", "臺北市", "新北市", "桃園市", "新竹市", "新竹縣",
+    "苗栗縣", "臺中市", "彰化縣", "南投縣", "雲林縣", "嘉義市",
+    "嘉義縣", "臺南市", "高雄市", "屏東縣", "宜蘭縣", "花蓮縣",
+    "臺東縣", "澎湖縣", "金門縣", "連江縣",
+  ];
+
+  const COLORS = {
+    基隆市: "#3aa0b8",
+    臺北市: "#e0b15a",
+    新北市: "#2c4f86",
+    桃園市: "#2f9a78",
+    新竹市: "#e08a45",
+    新竹縣: "#6d5cb0",
+    苗栗縣: "#3e9a55",
+    臺中市: "#3d74d0",
+    彰化縣: "#c4844a",
+    南投縣: "#2f8f6a",
+    雲林縣: "#8a5a92",
+    嘉義市: "#e0a04a",
+    嘉義縣: "#3d8eaa",
+    臺南市: "#5d8a48",
+    高雄市: "#b25a78",
+    屏東縣: "#3e7a9a",
+    宜蘭縣: "#8aaa48",
+    花蓮縣: "#7a6a9e",
+    臺東縣: "#6a9470",
+    澎湖縣: "#2a9aaa",
+    金門縣: "#d4a15a",
+    連江縣: "#7a8ec4",
+  };
+
+  /* Nudges in a 760px-tall map; scaled with the island and kept only if still on land. */
+  const NUDGE = {
+    新竹縣: [10, 14],
+    嘉義縣: [16, 8],
+    彰化縣: [-8, 6],
+    雲林縣: [-4, 10],
+    高雄市: [-6, 6],
+    臺東縣: [8, 4],
+  };
+
+  const SPIN_MS = 5400;
+  const SPIN_MS_REDUCED = 420;
+
+  const mapEl = document.getElementById("map");
+  const statusEl = document.getElementById("status");
+  const banner = document.getElementById("banner");
+  const bannerText = document.getElementById("banner-text");
+  const fx = document.getElementById("fx");
+  const drawBtn = document.getElementById("draw");
+  const resetBtn = document.getElementById("reset");
+  const norepeat = document.getElementById("norepeat");
+  const hint = document.getElementById("hint");
+  const historyEl = document.getElementById("history");
+
+  const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+  const state = {
+    counties: [],
+    history: [],
+    spinning: false,
+    winnerId: null,
+    frameId: null,
+    width: 0,
+    height: 0,
+    svg: null,
+    spotlight: null,
+    nodes: new Map(),
+    renderQueued: false,
+    paths: null,
+  };
+
+  function officialName(raw) {
+    return String(raw).replaceAll("台", "臺");
+  }
+
+  function randomIndex(n) {
+    if (n <= 1) return 0;
+    const limit = Math.floor(0x100000000 / n) * n;
+    const buf = new Uint32Array(1);
+    let value = 0;
+    do {
+      crypto.getRandomValues(buf);
+      value = buf[0];
+    } while (value >= limit);
+    return value % n;
+  }
+
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function mixWhite(hex, amount) {
+    const n = parseInt(hex.slice(1), 16);
+    const mix = (channel) => Math.round(channel + (255 - channel) * amount);
+    return "rgb(" + mix((n >> 16) & 255) + ", " + mix((n >> 8) & 255) + ", " + mix(n & 255) + ")";
+  }
+
+  function polygonsOf(feature) {
+    const geometry = feature.geometry;
+    if (!geometry) return [];
+    if (geometry.type === "Polygon") return [geometry.coordinates];
+    if (geometry.type === "MultiPolygon") return geometry.coordinates;
+    return [];
+  }
+
+  function ringArea(ring) {
+    let area = 0;
+    for (let i = 0, n = ring.length - 1; i < n; i += 1) {
+      area += ring[i][0] * ring[i + 1][1] - ring[i + 1][0] * ring[i][1];
+    }
+    return Math.abs(area) / 2;
+  }
+
+  function pointInRing(x, y, ring) {
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
+      const xi = ring[i][0];
+      const yi = ring[i][1];
+      const xj = ring[j][0];
+      const yj = ring[j][1];
+      const hit = (yi > y) !== (yj > y) &&
+        x < ((xj - xi) * (y - yi)) / ((yj - yi) || 1e-12) + xi;
+      if (hit) inside = !inside;
+    }
+    return inside;
+  }
+
+  function distToSeg(px, py, ax, ay, bx, by, kx) {
+    const dx = (bx - ax) * kx;
+    const dy = by - ay;
+    const len2 = dx * dx + dy * dy;
+    let t = len2 === 0 ? 0 : (((px - ax) * kx) * dx + (py - ay) * dy) / len2;
+    t = Math.max(0, Math.min(1, t));
+    const qx = ax + ((bx - ax) * t);
+    const qy = ay + (by - ay) * t;
+    return Math.hypot((px - qx) * kx, py - qy);
+  }
+
+  function clearance(x, y, polygon, kx) {
+    let best = Infinity;
+    for (let r = 0; r < polygon.length; r += 1) {
+      const ring = polygon[r];
+      for (let i = 0, n = ring.length - 1; i < n; i += 1) {
+        const d = distToSeg(x, y, ring[i][0], ring[i][1], ring[i + 1][0], ring[i + 1][1], kx);
+        if (d < best) best = d;
+      }
+    }
+    return best;
+  }
+
+  function interiorPoint(polygon) {
+    const outer = polygon[0];
+    const holes = polygon.slice(1);
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (let i = 0; i < outer.length; i += 1) {
+      const x = outer[i][0];
+      const y = outer[i][1];
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+    const kx = Math.cos(((minY + maxY) / 2) * Math.PI / 180);
+    const steps = 30;
+    let best = null;
+    let bestD = -1;
+    for (let iy = 0; iy <= steps; iy += 1) {
+      const y = minY + ((maxY - minY) * iy) / steps;
+      for (let ix = 0; ix <= steps; ix += 1) {
+        const x = minX + ((maxX - minX) * ix) / steps;
+        if (!pointInRing(x, y, outer)) continue;
+        let inHole = false;
+        for (let h = 0; h < holes.length; h += 1) {
+          if (pointInRing(x, y, holes[h])) {
+            inHole = true;
+            break;
+          }
+        }
+        if (inHole) continue;
+        const d = clearance(x, y, polygon, kx);
+        if (d > bestD) {
+          bestD = d;
+          best = [x, y];
+        }
+      }
+    }
+    if (best) return best;
+    let sx = 0;
+    let sy = 0;
+    for (let i = 0; i < outer.length; i += 1) {
+      sx += outer[i][0];
+      sy += outer[i][1];
+    }
+    return [sx / outer.length, sy / outer.length];
+  }
+
+  function ringCentroid(ring) {
+    let x = 0;
+    let y = 0;
+    let area = 0;
+    for (let i = 0, n = ring.length - 1; i < n; i += 1) {
+      const cross = ring[i][0] * ring[i + 1][1] - ring[i + 1][0] * ring[i][1];
+      area += cross;
+      x += (ring[i][0] + ring[i + 1][0]) * cross;
+      y += (ring[i][1] + ring[i + 1][1]) * cross;
+    }
+    if (Math.abs(area) < 1e-14) {
+      let sx = 0;
+      let sy = 0;
+      for (let i = 0; i < ring.length; i += 1) {
+        sx += ring[i][0];
+        sy += ring[i][1];
+      }
+      return [sx / ring.length, sy / ring.length];
+    }
+    return [x / (3 * area), y / (3 * area)];
+  }
+
+  function classify(lon, lat) {
+    if (lat >= 25.75) return "lienchiang";
+    if (lon <= 118.95 && lat >= 24.25 && lat <= 24.7) return "kinmen";
+    if (lon >= 119.25 && lon <= 119.7 && lat >= 24.8 && lat <= 25.2) return "wuqiu";
+    if (lon <= 119.95 && lat >= 23.05 && lat <= 23.95) return "penghu";
+    return "main";
+  }
+
+  function splitLienchiang(polygons) {
+    const main = [];
+    const dongyin = [];
+    const liang = [];
+    const juguang = [];
+    polygons.forEach((polygon) => {
+      const centroid = ringCentroid(polygon[0]);
+      if (centroid[0] >= 120.35) dongyin.push(polygon);
+      else if (centroid[0] >= 120.15) liang.push(polygon);
+      else if (centroid[1] < 26.08) juguang.push(polygon);
+      else main.push(polygon);
+    });
+    return { main, dongyin, liang, juguang };
+  }
+
+  function asFeature(polygons) {
+    if (!polygons.length) return null;
+    return {
+      type: "Feature",
+      properties: {},
+      geometry: polygons.length === 1
+        ? { type: "Polygon", coordinates: polygons[0] }
+        : { type: "MultiPolygon", coordinates: polygons },
+    };
+  }
+
+  function buildCounties(topo) {
+    const collection = topojson.feature(topo, topo.objects.counties);
+    const counties = collection.features.map((feature) => {
+      const name = officialName(feature.properties.COUNTYNAME);
+      const buckets = { main: [], penghu: [], kinmen: [], wuqiu: [], lienchiang: [] };
+      const polygons = polygonsOf(feature);
+      polygons.forEach((polygon) => {
+        const centroid = ringCentroid(polygon[0]);
+        const region = classify(centroid[0], centroid[1]);
+        buckets[region].push(polygon);
+      });
+      let labelPolygons = polygons;
+      if (name === "金門縣") labelPolygons = buckets.kinmen;
+      else if (name === "澎湖縣") labelPolygons = buckets.penghu;
+      else if (name === "連江縣") {
+        const parts = splitLienchiang(buckets.lienchiang);
+        labelPolygons = parts.main.length ? parts.main : buckets.lienchiang;
+      } else labelPolygons = buckets.main;
+      let labelPolygon = labelPolygons[0];
+      let labelArea = -1;
+      labelPolygons.forEach((polygon) => {
+        const area = ringArea(polygon[0]);
+        if (area > labelArea) {
+          labelArea = area;
+          labelPolygon = polygon;
+        }
+      });
+      const area = polygons.reduce((sum, polygon) => sum + ringArea(polygon[0]), 0);
+      return {
+        id: String(feature.properties.COUNTYCODE),
+        name,
+        color: COLORS[name] || "#4d6a88",
+        warm: mixWhite(COLORS[name] || "#4d6a88", 0.3),
+        hot: mixWhite(COLORS[name] || "#4d6a88", 0.52),
+        buckets,
+        labelPolygon,
+        anchor: interiorPoint(labelPolygon),
+        area,
+        d: "",
+      };
+    });
+
+    const names = counties.map((county) => county.name).sort();
+    const expected = OFFICIAL.slice().sort();
+    if (names.length !== 22 || names.some((name, index) => name !== expected[index])) {
+      throw new Error("縣市名稱與二十二縣市不符：" + names.join("、"));
+    }
+    return counties;
+  }
+
+  function computeLayout(width, height) {
+    const gap = Math.max(10, Math.round(Math.min(width, height) * 0.016));
+    const wide = width / height > 0.98;
+    if (wide) {
+      const insetW = Math.round(Math.min(width * 0.24, Math.max(168, height * 0.34)));
+      const innerH = height - gap * 2;
+      const boxH = (innerH - gap * 2) / 3;
+      return {
+        wide: true,
+        main: {
+          x: gap * 2 + insetW,
+          y: gap,
+          w: width - insetW - gap * 3,
+          h: height - gap * 2,
+        },
+        insets: [
+          { key: "lienchiang", name: "連江縣", x: gap, y: gap, w: insetW, h: boxH },
+          { key: "kinmen", name: "金門縣", x: gap, y: gap + boxH + gap, w: insetW, h: boxH },
+          { key: "penghu", name: "澎湖縣", x: gap, y: gap + (boxH + gap) * 2, w: insetW, h: boxH },
+        ],
+      };
+    }
+    const insetH = Math.round(Math.min(height * 0.24, Math.max(112, width * 0.36)));
+    const boxW = (width - gap * 4) / 3;
+    const y = height - insetH - gap;
+    return {
+      wide: false,
+      main: { x: gap, y: gap, w: width - gap * 2, h: height - insetH - gap * 3 },
+      insets: [
+        { key: "penghu", name: "澎湖縣", x: gap, y, w: boxW, h: insetH },
+        { key: "kinmen", name: "金門縣", x: gap * 2 + boxW, y, w: boxW, h: insetH },
+        { key: "lienchiang", name: "連江縣", x: gap * 3 + boxW * 2, y, w: boxW, h: insetH },
+      ],
+    };
+  }
+
+  function contentOf(box) {
+    const header = Math.min(22, Math.max(16, box.h * 0.14));
+    const padX = Math.min(10, Math.max(6, box.w * 0.045));
+    const padB = Math.min(8, Math.max(5, box.h * 0.04));
+    return {
+      header,
+      inner: {
+        x: box.x + padX,
+        y: box.y + header + 3,
+        w: Math.max(12, box.w - padX * 2),
+        h: Math.max(12, box.h - header - padB - 3),
+      },
+    };
+  }
+
+  function fitPath(features, x0, y0, x1, y1) {
+    if (!features.length || x1 - x0 < 8 || y1 - y0 < 8) return null;
+    const projection = d3.geoMercator().fitExtent(
+      [[x0, y0], [x1, y1]],
+      { type: "FeatureCollection", features },
+    );
+    return d3.geoPath(projection);
+  }
+
+  function fontSize(bounds, name, inset, mapH) {
+    const w = Math.max(0, bounds[1][0] - bounds[0][0]);
+    const h = Math.max(0, bounds[1][1] - bounds[0][1]);
+    const size = Math.min((w * 0.82) / name.length, h * 0.55);
+    const cap = Math.min(inset ? 16 : 16.5, Math.max(11, mapH / 50));
+    const min = inset ? 10.5 : 8;
+    if (!Number.isFinite(size)) return min;
+    return Math.max(min, Math.min(cap, size));
+  }
+
+  function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+  }
+
+  function el(name, attrs, parent) {
+    const node = document.createElementNS("http://www.w3.org/2000/svg", name);
+    if (attrs) {
+      Object.keys(attrs).forEach((key) => {
+        node.setAttribute(key, attrs[key]);
+      });
+    }
+    if (parent) parent.appendChild(node);
+    return node;
+  }
+
+  function render() {
+    const width = state.width;
+    const height = state.height;
+    const layout = computeLayout(width, height);
+    const byKey = {};
+    layout.insets.forEach((box) => {
+      byKey[box.key] = box;
+    });
+
+    const mainFeatures = [];
+    const penghuFeatures = [];
+    const kinmenFeatures = [];
+    const wuqiuFeatures = [];
+    state.counties.forEach((county) => {
+      const main = asFeature(county.buckets.main);
+      const penghu = asFeature(county.buckets.penghu);
+      const kinmen = asFeature(county.buckets.kinmen);
+      const wuqiu = asFeature(county.buckets.wuqiu);
+      if (main) mainFeatures.push(main);
+      if (penghu) penghuFeatures.push(penghu);
+      if (kinmen) kinmenFeatures.push(kinmen);
+      if (wuqiu) wuqiuFeatures.push(wuqiu);
+    });
+
+    const mainPad = Math.max(12, Math.min(26, Math.min(layout.main.w, layout.main.h) * 0.035));
+    const pathMain = fitPath(
+      mainFeatures,
+      layout.main.x + mainPad,
+      layout.main.y + mainPad,
+      layout.main.x + layout.main.w - mainPad,
+      layout.main.y + layout.main.h - mainPad,
+    );
+
+    const penghuBox = contentOf(byKey.penghu).inner;
+    const lienchiangBox = contentOf(byKey.lienchiang).inner;
+    const lienSide = Math.min(lienchiangBox.w * 0.32, 78);
+    const lienMainBox = {
+      x: lienchiangBox.x,
+      y: lienchiangBox.y,
+      w: Math.max(12, lienchiangBox.w - lienSide - 6),
+      h: lienchiangBox.h,
+    };
+    const dongyinBox = {
+      x: lienchiangBox.x + lienchiangBox.w - lienSide,
+      y: lienchiangBox.y,
+      w: lienSide,
+      h: lienchiangBox.h * 0.48,
+    };
+    const juguangBox = {
+      x: dongyinBox.x,
+      y: lienchiangBox.y + lienchiangBox.h * 0.52,
+      w: lienSide,
+      h: lienchiangBox.h * 0.48,
+    };
+    const kinmenContent = contentOf(byKey.kinmen);
+    const kinmenInner = kinmenContent.inner;
+    const wuW = Math.min(kinmenInner.w * 0.34, 92);
+    const wuH = Math.min(kinmenInner.h * 0.38, 78);
+    const wuqiuBox = {
+      x: kinmenInner.x + kinmenInner.w - wuW,
+      y: kinmenInner.y,
+      w: wuW,
+      h: wuH,
+    };
+    const kinmenBox = {
+      x: kinmenInner.x,
+      y: kinmenInner.y,
+      w: Math.max(12, kinmenInner.w - wuW - 8),
+      h: kinmenInner.h,
+    };
+
+    const pad = (box, ratio) => Math.max(4, Math.min(box.w, box.h) * ratio);
+    const pathPenghu = fitPath(
+      penghuFeatures,
+      penghuBox.x + pad(penghuBox, 0.06),
+      penghuBox.y + pad(penghuBox, 0.06),
+      penghuBox.x + penghuBox.w - pad(penghuBox, 0.06),
+      penghuBox.y + penghuBox.h - pad(penghuBox, 0.06),
+    );
+    const lienMainPolys = [];
+    const lienDongPolys = [];
+    const lienLiangPolys = [];
+    const lienJuPolys = [];
+    state.counties.forEach((county) => {
+      const parts = splitLienchiang(county.buckets.lienchiang);
+      lienMainPolys.push(...parts.main);
+      lienDongPolys.push(...parts.dongyin);
+      lienLiangPolys.push(...parts.liang);
+      lienJuPolys.push(...parts.juguang);
+    });
+    const pathLienchiang = fitPath(
+      [asFeature(lienMainPolys)].filter(Boolean),
+      lienMainBox.x + 4,
+      lienMainBox.y + 4,
+      lienMainBox.x + lienMainBox.w - 4,
+      lienMainBox.y + lienMainBox.h - 4,
+    );
+    const dongTop = lienLiangPolys.length ? dongyinBox.h * 0.62 : dongyinBox.h;
+    const pathDongyin = fitPath(
+      [asFeature(lienDongPolys)].filter(Boolean),
+      dongyinBox.x + 4,
+      dongyinBox.y + 14,
+      dongyinBox.x + dongyinBox.w - 4,
+      dongyinBox.y + dongTop - 2,
+    );
+    const pathLiang = fitPath(
+      [asFeature(lienLiangPolys)].filter(Boolean),
+      dongyinBox.x + 6,
+      dongyinBox.y + dongTop + 2,
+      dongyinBox.x + dongyinBox.w - 6,
+      dongyinBox.y + dongyinBox.h - 4,
+    );
+    const pathJuguang = fitPath(
+      [asFeature(lienJuPolys)].filter(Boolean),
+      juguangBox.x + 4,
+      juguangBox.y + 14,
+      juguangBox.x + juguangBox.w - 4,
+      juguangBox.y + juguangBox.h - 4,
+    );
+    const pathKinmen = fitPath(
+      kinmenFeatures,
+      kinmenBox.x + 4,
+      kinmenBox.y + 4,
+      kinmenBox.x + kinmenBox.w - 4,
+      kinmenBox.y + kinmenBox.h - 4,
+    );
+    const pathWuqiu = fitPath(
+      wuqiuFeatures,
+      wuqiuBox.x + 5,
+      wuqiuBox.y + 16,
+      wuqiuBox.x + wuqiuBox.w - 5,
+      wuqiuBox.y + wuqiuBox.h - 5,
+    );
+
+    const paths = {
+      main: pathMain,
+      penghu: pathPenghu,
+      kinmen: pathKinmen,
+      wuqiu: pathWuqiu,
+      lienchiang: pathLienchiang,
+      dongyin: pathDongyin,
+      liang: pathLiang,
+      juguang: pathJuguang,
+    };
+    state.paths = paths;
+
+    const svg = el("svg", {
+      class: "map-svg",
+      viewBox: "0 0 " + width + " " + height,
+      width: String(width),
+      height: String(height),
+      role: "img",
+      "aria-label": "臺灣二十二縣市地圖",
+    });
+    svg.style.setProperty("--spot", (Math.max(4.5, Math.min(7, Math.min(width, height) / 150))).toFixed(2) + "px");
+    if (state.spinning) svg.classList.add("is-spinning");
+
+    const defs = el("defs", null, svg);
+    const gradient = el("radialGradient", {
+      id: "sea",
+      cx: layout.wide ? "68%" : "50%",
+      cy: layout.wide ? "46%" : "38%",
+      r: "78%",
+    }, defs);
+    el("stop", { offset: "0%", "stop-color": "#17324c" }, gradient);
+    el("stop", { offset: "50%", "stop-color": "#0d1b2c" }, gradient);
+    el("stop", { offset: "100%", "stop-color": "#070e18" }, gradient);
+    el("rect", { class: "sea", x: 0, y: 0, width, height, fill: "url(#sea)" }, svg);
+
+    layout.insets.forEach((box) => {
+      const piece = contentOf(box);
+      el("rect", {
+        class: "inset-frame",
+        "data-inset": box.key,
+        x: box.x,
+        y: box.y,
+        width: box.w,
+        height: box.h,
+        rx: 14,
+      }, svg);
+      const caption = el("text", {
+        class: "inset-caption",
+        x: box.x + 12,
+        y: box.y + piece.header * 0.72,
+        "font-size": "12",
+      }, svg);
+      caption.textContent = box.name;
+    });
+
+    el("rect", {
+      class: "wuqiu-frame",
+      x: wuqiuBox.x,
+      y: wuqiuBox.y,
+      width: wuqiuBox.w,
+      height: wuqiuBox.h,
+      rx: 8,
+    }, svg);
+    const wuqiuLabel = el("text", {
+      class: "wuqiu-caption",
+      x: wuqiuBox.x + wuqiuBox.w / 2,
+      y: wuqiuBox.y + 11,
+      "text-anchor": "middle",
+      "font-size": "10",
+    }, svg);
+    wuqiuLabel.textContent = "烏坵";
+
+    [[dongyinBox, "東引"], [juguangBox, "莒光"]].forEach(([box, caption]) => {
+      el("rect", {
+        class: "wuqiu-frame",
+        x: box.x,
+        y: box.y,
+        width: box.w,
+        height: box.h,
+        rx: 8,
+      }, svg);
+      const text = el("text", {
+        class: "wuqiu-caption",
+        x: box.x + box.w / 2,
+        y: box.y + 11,
+        "text-anchor": "middle",
+        "font-size": "10",
+      }, svg);
+      text.textContent = caption;
+    });
+
+    const layer = el("g", { class: "counties" }, svg);
+    const nodes = new Map();
+    const ordered = state.counties.slice().sort((a, b) => b.area - a.area);
+    ordered.forEach((county) => {
+      let d = "";
+      ["main", "penghu", "kinmen", "wuqiu"].forEach((key) => {
+        const feature = asFeature(county.buckets[key]);
+        if (!feature || !paths[key]) return;
+        d += paths[key](feature) || "";
+      });
+      const lienParts = splitLienchiang(county.buckets.lienchiang);
+      [["main", "lienchiang"], ["dongyin", "dongyin"], ["liang", "liang"], ["juguang", "juguang"]].forEach(([part, key]) => {
+        const feature = asFeature(lienParts[part]);
+        if (!feature || !paths[key]) return;
+        d += paths[key](feature) || "";
+      });
+      county.d = d;
+      const path = el("path", {
+        class: "county",
+        "data-id": county.id,
+        "data-name": county.name,
+        d: d,
+        fill: county.color,
+      }, layer);
+      const title = el("title", null, path);
+      title.textContent = county.name;
+      nodes.set(county.id, { path, label: null });
+    });
+
+    state.counties.forEach((county) => {
+      const region = county.buckets.main.length
+        ? "main"
+        : county.buckets.kinmen.length
+          ? "kinmen"
+          : county.buckets.penghu.length
+            ? "penghu"
+            : "lienchiang";
+      const pathGen = paths[region];
+      const projected = pathGen.projection()(county.anchor);
+      const bounds = pathGen.bounds(asFeature([county.labelPolygon]));
+      const inset = region !== "main";
+      const box = region === "main" ? layout.main : byKey[region];
+      const nudge = NUDGE[county.name] || [0, 0];
+      const nudgeScale = layout.main.h / 760;
+      let x = projected[0];
+      let y = projected[1];
+      const movedX = x + nudge[0] * nudgeScale;
+      const movedY = y + nudge[1] * nudgeScale;
+      const probe = svg.createSVGPoint();
+      probe.x = movedX;
+      probe.y = movedY;
+      if (nodes.get(county.id).path.isPointInFill(probe)) {
+        x = movedX;
+        y = movedY;
+      }
+      const margin = inset ? 14 : 6;
+      const clampedX = clamp(x, box.x + margin, box.x + box.w - margin);
+      const clampedY = clamp(y, box.y + (inset ? 22 : margin), box.y + box.h - margin);
+      probe.x = clampedX;
+      probe.y = clampedY;
+      if (nodes.get(county.id).path.isPointInFill(probe)) {
+        x = clampedX;
+        y = clampedY;
+      }
+      const size = fontSize(bounds, county.name, inset, layout.main.h);
+      const label = el("text", {
+        class: "county-label",
+        "data-name": county.name,
+        x: x.toFixed(1),
+        y: y.toFixed(1),
+        "font-size": size.toFixed(1),
+      }, svg);
+      label.textContent = county.name;
+      nodes.get(county.id).label = label;
+    });
+
+    const spotlight = el("path", { class: "spotlight" }, svg);
+    spotlight.style.display = "none";
+
+    mapEl.replaceChildren(svg);
+    state.svg = svg;
+    state.spotlight = spotlight;
+    state.nodes = nodes;
+    applyVisualState();
+  }
+
+  function scheduleRender() {
+    if (state.renderQueued) return;
+    state.renderQueued = true;
+    requestAnimationFrame(() => {
+      state.renderQueued = false;
+      const rect = mapEl.getBoundingClientRect();
+      const width = Math.floor(rect.width);
+      const height = Math.floor(rect.height);
+      if (width < 40 || height < 40) return;
+      if (width === state.width && height === state.height && state.svg) return;
+      state.width = width;
+      state.height = height;
+      render();
+    });
+  }
+
+  function eligibleCounties() {
+    if (!norepeat.checked) return state.counties.slice();
+    const drawn = new Set(state.history.map((item) => item.id));
+    return state.counties.filter((county) => !drawn.has(county.id));
+  }
+
+  function applyVisualState() {
+    const drawn = new Set(state.history.map((item) => item.id));
+    state.counties.forEach((county) => {
+      const node = state.nodes.get(county.id);
+      if (!node) return;
+      const isWinner = state.winnerId === county.id;
+      const isHot = state.spinning && state.frameId === county.id;
+      const spent = norepeat.checked && drawn.has(county.id) && !isWinner;
+      node.path.classList.toggle("is-winner", isWinner);
+      node.path.classList.toggle("is-hot", isHot);
+      node.path.classList.toggle("is-spent", spent);
+      node.label.classList.toggle("is-spent", spent);
+      const fill = isWinner ? county.hot : isHot ? county.warm : county.color;
+      node.path.setAttribute("fill", fill);
+    });
+    if (state.svg) state.svg.classList.toggle("is-spinning", state.spinning);
+    const framed = state.counties.find((county) => county.id === state.frameId);
+    if (framed && framed.d && state.spotlight) {
+      state.spotlight.setAttribute("d", framed.d);
+      state.spotlight.style.display = "";
+    } else if (state.spotlight) {
+      state.spotlight.removeAttribute("d");
+      state.spotlight.style.display = "none";
+    }
+  }
+
+  function syncControls() {
+    const eligible = eligibleCounties();
+    const blocked = state.spinning || eligible.length === 0;
+    drawBtn.disabled = blocked || !state.counties.length;
+    resetBtn.disabled = state.spinning || state.history.length === 0;
+    norepeat.disabled = state.spinning;
+    if (state.spinning) drawBtn.textContent = "抽籤中…";
+    else if (eligible.length === 0) drawBtn.textContent = "已抽完";
+    else if (state.history.length) drawBtn.textContent = "再抽一次";
+    else drawBtn.textContent = "抽獎";
+    if (norepeat.checked && eligible.length === 0) {
+      hint.textContent = "二十二個縣市都已抽出";
+    } else if (norepeat.checked) {
+      hint.textContent = "已抽出的縣市不會再被抽到";
+    } else {
+      hint.textContent = "每一輪都從全部縣市抽出";
+    }
+  }
+
+  function renderHistory() {
+    historyEl.replaceChildren();
+    if (!state.history.length) {
+      const empty = document.createElement("li");
+      empty.className = "empty";
+      empty.textContent = "尚無抽獎紀錄";
+      historyEl.appendChild(empty);
+      return;
+    }
+    for (let i = state.history.length - 1; i >= 0; i -= 1) {
+      const item = state.history[i];
+      const li = document.createElement("li");
+      const n = document.createElement("span");
+      n.className = "n";
+      n.textContent = "第 " + (i + 1) + " 次";
+      const name = document.createElement("span");
+      name.className = "name";
+      const swatch = document.createElement("i");
+      swatch.className = "swatch";
+      swatch.style.background = item.color;
+      name.append(swatch, document.createTextNode(item.name));
+      li.append(n, name);
+      historyEl.appendChild(li);
+    }
+  }
+
+  function hideBanner() {
+    banner.hidden = true;
+    banner.classList.remove("is-on");
+    bannerText.textContent = "";
+    fx.classList.remove("go");
+    fx.replaceChildren();
+  }
+
+  function showBanner(name) {
+    bannerText.textContent = "抽中：" + name;
+    banner.hidden = false;
+    banner.classList.remove("is-on");
+    void banner.offsetWidth;
+    banner.classList.add("is-on");
+  }
+
+  function celebrate() {
+    if (motionQuery.matches) return;
+    fx.replaceChildren();
+    const colors = ["#ffffff", "#ffe7a8", "#b9dcff", "#ffd5e4", "#fff4cc"];
+    const count = 28;
+    for (let i = 0; i < count; i += 1) {
+      const piece = document.createElement("i");
+      const angle = (Math.PI * 2 * i) / count + Math.random() * 0.4;
+      const dist = 70 + Math.random() * 90;
+      piece.style.setProperty("--dx", Math.cos(angle) * dist + "px");
+      piece.style.setProperty("--dy", Math.sin(angle) * dist * 0.72 + "px");
+      piece.style.setProperty("--rot", (Math.random() * 240 - 120) + "deg");
+      piece.style.background = colors[i % colors.length];
+      piece.style.animationDelay = (Math.random() * 40) + "ms";
+      fx.appendChild(piece);
+    }
+    fx.classList.remove("go");
+    void fx.offsetWidth;
+    fx.classList.add("go");
+  }
+
+  function makeDelays(totalMs) {
+    const delays = [];
+    let elapsed = 0;
+    let gap = 58;
+    while (elapsed + gap < totalMs) {
+      const rounded = Math.round(gap);
+      delays.push(rounded);
+      elapsed += rounded;
+      gap = gap * 1.105 + 3.2;
+    }
+    return delays;
+  }
+
+  function buildHops(eligible, winner) {
+    const total = motionQuery.matches ? SPIN_MS_REDUCED : SPIN_MS;
+    const delays = makeDelays(total);
+    const hops = [];
+    let previous = null;
+    delays.forEach((delay, index) => {
+      const last = index === delays.length - 1;
+      let id = winner.id;
+      if (eligible.length > 1) {
+        let guard = 0;
+        do {
+          id = eligible[randomIndex(eligible.length)].id;
+          guard += 1;
+        } while (guard < 12 && (id === previous || (last && id === winner.id)));
+      }
+      hops.push({ id, delay });
+      previous = id;
+    });
+    hops.push({ id: winner.id, delay: 0 });
+    return hops;
+  }
+
+  async function spin() {
+    if (state.spinning) return;
+    const eligible = eligibleCounties();
+    if (!eligible.length) return;
+    if (!window.crypto || !crypto.getRandomValues) {
+      hint.textContent = "這個瀏覽器無法提供公平的亂數";
+      return;
+    }
+    state.spinning = true;
+    state.winnerId = null;
+    syncControls();
+    hideBanner();
+    const winner = eligible[randomIndex(eligible.length)];
+    const hops = buildHops(eligible, winner);
+    for (let i = 0; i < hops.length; i += 1) {
+      state.frameId = hops[i].id;
+      applyVisualState();
+      if (hops[i].delay > 0) await sleep(hops[i].delay);
+    }
+    state.spinning = false;
+    state.winnerId = winner.id;
+    state.frameId = winner.id;
+    state.history.push({ id: winner.id, name: winner.name, color: winner.color });
+    applyVisualState();
+    showBanner(winner.name);
+    celebrate();
+    renderHistory();
+    syncControls();
+  }
+
+  function resetAll() {
+    if (state.spinning) return;
+    state.history = [];
+    state.winnerId = null;
+    state.frameId = null;
+    hideBanner();
+    applyVisualState();
+    renderHistory();
+    syncControls();
+  }
+
+  async function init() {
+    if (!window.d3 || !window.topojson) {
+      statusEl.textContent = "地圖載入失敗，請重新整理";
+      return;
+    }
+    const response = await fetch("data/counties-10t.json");
+    if (!response.ok) throw new Error("map data " + response.status);
+    const topo = await response.json();
+    state.counties = buildCounties(topo);
+    statusEl.remove();
+    syncControls();
+    scheduleRender();
+    const observer = new ResizeObserver(scheduleRender);
+    observer.observe(mapEl);
+    window.addEventListener("resize", scheduleRender);
+  }
+
+  drawBtn.addEventListener("click", () => {
+    spin().catch((error) => {
+      console.error(error);
+      state.spinning = false;
+      syncControls();
+      hint.textContent = "抽獎沒有完成，請再試一次";
+    });
+  });
+  resetBtn.addEventListener("click", resetAll);
+  norepeat.addEventListener("change", () => {
+    applyVisualState();
+    syncControls();
+  });
+
+  init().catch((error) => {
+    console.error(error);
+    statusEl.textContent = "地圖載入失敗，請重新整理";
+  });
+}());
