@@ -243,13 +243,13 @@ body {
 }
 
 .spot-glow {
-  stroke: rgba(255, 255, 255, 0.55);
-  stroke-width: 10px;
+  stroke: rgba(255, 255, 255, 0.42);
+  stroke-width: 4.5px;
 }
 
 .spot-core {
   stroke: #ffffff;
-  stroke-width: 4.5px;
+  stroke-width: 2px;
 }
 
 .panel {
@@ -570,6 +570,9 @@ body {
 
   .controls { margin-top: 10px; }
   .history-title { margin-top: 12px; }
+
+  .spot-glow { stroke-width: 3.5px; }
+  .spot-core { stroke-width: 1.5px; }
 }
 
 @media (hover: none) {
