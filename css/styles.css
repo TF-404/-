@@ -495,10 +495,32 @@ body {
   border-style: dashed;
 }
 
+.donate {
+  flex: none;
+  align-self: flex-start;
+  height: 32px;
+  margin-top: 10px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.03);
+  color: #d5deea;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 30px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.donate:not([hidden]) { display: inline-flex; align-items: center; }
+.donate[hidden] { display: none !important; }
+.donate:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+
 .credit {
   flex: none;
   height: 1.4em;
-  margin: 12px 0 0;
+  margin: 10px 0 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;

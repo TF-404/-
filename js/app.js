@@ -34,6 +34,9 @@
     澎湖縣: "#2a9aaa",
     金門縣: "#d4a15a",
     連江縣: "#7a8ec4",
+    小琉球: "#d9893a",
+    綠島: "#2fbfa0",
+    蘭嶼: "#d06a8a",
   };
 
   /* Nudges in a 760px-tall map; scaled with the island and kept only if still on land. */
@@ -55,6 +58,7 @@
   ];
 
   const mapEl = document.getElementById("map");
+  const donateEl = document.getElementById("donate");
   const statusEl = document.getElementById("status");
   const banner = document.getElementById("banner");
   const bannerText = document.getElementById("banner-text");
@@ -66,6 +70,19 @@
   const historyEl = document.getElementById("history");
 
   const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+  function applyDonateLink() {
+    const raw = typeof DONATE_URL === "string" ? DONATE_URL.trim() : "";
+    if (!/^https?:\/\//i.test(raw)) {
+      donateEl.hidden = true;
+      donateEl.removeAttribute("href");
+      return;
+    }
+    donateEl.href = raw;
+    donateEl.hidden = false;
+  }
+
+  applyDonateLink();
 
   const state = {
     counties: [],
@@ -138,6 +155,16 @@
       if (hit) inside = !inside;
     }
     return inside;
+  }
+
+  function pointInFeature(x, y, feature) {
+    return polygonsOf(feature).some((polygon) => {
+      if (!pointInRing(x, y, polygon[0])) return false;
+      for (let hole = 1; hole < polygon.length; hole += 1) {
+        if (pointInRing(x, y, polygon[hole])) return false;
+      }
+      return true;
+    });
   }
 
   function distToSeg(px, py, ax, ay, bx, by, kx) {
@@ -268,52 +295,89 @@
     };
   }
 
-  function buildCounties(topo) {
+  function largestPolygon(polygons) {
+    let best = polygons[0];
+    let bestArea = -1;
+    polygons.forEach((polygon) => {
+      const area = ringArea(polygon[0]);
+      if (area > bestArea) {
+        bestArea = area;
+        best = polygon;
+      }
+    });
+    return best;
+  }
+
+  function entryFromPolygons(id, name, polygons, buckets, callout) {
+    const labelPolygon = largestPolygon(polygons);
+    const color = COLORS[name] || "#4d6a88";
+    return {
+      id,
+      name,
+      color,
+      warm: mixWhite(color, 0.3),
+      hot: mixWhite(color, 0.52),
+      buckets,
+      callout,
+      calloutPolygons: callout ? polygons : null,
+      labelPolygon,
+      anchor: interiorPoint(labelPolygon),
+      area: polygons.reduce((sum, polygon) => sum + ringArea(polygon[0]), 0),
+      d: "",
+    };
+  }
+
+  function buildCounties(topo, islands) {
+    const islandFeatures = islands.features || [];
+    const onIsland = (polygon) => {
+      const centroid = ringCentroid(polygon[0]);
+      return islandFeatures.some((feature) => pointInFeature(centroid[0], centroid[1], feature));
+    };
     const collection = topojson.feature(topo, topo.objects.counties);
     const counties = collection.features.map((feature) => {
       const name = officialName(feature.properties.COUNTYNAME);
       const buckets = { main: [], penghu: [], kinmen: [], wuqiu: [], lienchiang: [] };
-      const polygons = polygonsOf(feature);
-      polygons.forEach((polygon) => {
+      polygonsOf(feature).forEach((polygon) => {
+        if (onIsland(polygon)) return;
         const centroid = ringCentroid(polygon[0]);
-        const region = classify(centroid[0], centroid[1]);
-        buckets[region].push(polygon);
+        buckets[classify(centroid[0], centroid[1])].push(polygon);
       });
-      let labelPolygons = polygons;
+      let labelPolygons = buckets.main;
       if (name === "金門縣") labelPolygons = buckets.kinmen;
       else if (name === "澎湖縣") labelPolygons = buckets.penghu;
       else if (name === "連江縣") {
         const parts = splitLienchiang(buckets.lienchiang);
         labelPolygons = parts.main.length ? parts.main : buckets.lienchiang;
-      } else labelPolygons = buckets.main;
-      let labelPolygon = labelPolygons[0];
-      let labelArea = -1;
-      labelPolygons.forEach((polygon) => {
-        const area = ringArea(polygon[0]);
-        if (area > labelArea) {
-          labelArea = area;
-          labelPolygon = polygon;
-        }
-      });
-      const area = polygons.reduce((sum, polygon) => sum + ringArea(polygon[0]), 0);
-      return {
-        id: String(feature.properties.COUNTYCODE),
+      }
+      const all = buckets.main.concat(buckets.penghu, buckets.kinmen, buckets.wuqiu, buckets.lienchiang);
+      const entry = entryFromPolygons(
+        String(feature.properties.COUNTYCODE),
         name,
-        color: COLORS[name] || "#4d6a88",
-        warm: mixWhite(COLORS[name] || "#4d6a88", 0.3),
-        hot: mixWhite(COLORS[name] || "#4d6a88", 0.52),
+        labelPolygons.length ? labelPolygons : all,
         buckets,
-        labelPolygon,
-        anchor: interiorPoint(labelPolygon),
-        area,
-        d: "",
-      };
+        null,
+      );
+      entry.area = all.reduce((sum, polygon) => sum + ringArea(polygon[0]), 0);
+      return entry;
+    });
+
+    islandFeatures.forEach((feature) => {
+      const polygons = polygonsOf(feature);
+      const empty = { main: [], penghu: [], kinmen: [], wuqiu: [], lienchiang: [] };
+      counties.push(entryFromPolygons(feature.properties.id, feature.properties.name, polygons, empty, feature.properties.id));
     });
 
     const names = counties.map((county) => county.name).sort();
-    const expected = OFFICIAL.slice().sort();
-    if (names.length !== 22 || names.some((name, index) => name !== expected[index])) {
-      throw new Error("縣市名稱與二十二縣市不符：" + names.join("、"));
+    const expected = OFFICIAL.concat(islandFeatures.map((feature) => feature.properties.name)).sort();
+    if (names.length !== 25 || names.some((name, index) => name !== expected[index])) {
+      throw new Error("抽獎名單與二十五個地區不符：" + names.join("、"));
+    }
+    const kept = (name) => {
+      const county = counties.find((item) => item.name === name);
+      return county.buckets.main.length + county.buckets.penghu.length + county.buckets.kinmen.length + county.buckets.wuqiu.length + county.buckets.lienchiang.length;
+    };
+    if (kept("屏東縣") !== 1 || kept("臺東縣") !== 1) {
+      throw new Error("小琉球、綠島、蘭嶼沒有從屏東縣與臺東縣拆開");
     }
     return counties;
   }
@@ -324,7 +388,8 @@
     if (wide) {
       const insetW = Math.round(Math.min(width * 0.24, Math.max(168, height * 0.34)));
       const innerH = height - gap * 2;
-      const boxH = (innerH - gap * 2) / 3;
+      const islandH = Math.round(Math.min(Math.max(118, innerH * 0.18), 150));
+      const boxH = (innerH - islandH - gap * 3) / 3;
       return {
         wide: true,
         main: {
@@ -338,20 +403,67 @@
           { key: "kinmen", name: "金門縣", x: gap, y: gap + boxH + gap, w: insetW, h: boxH },
           { key: "penghu", name: "澎湖縣", x: gap, y: gap + (boxH + gap) * 2, w: insetW, h: boxH },
         ],
+        islands: { x: gap, y: gap + (boxH + gap) * 3, w: insetW, h: islandH },
       };
     }
-    const insetH = Math.round(Math.min(height * 0.24, Math.max(112, width * 0.36)));
+    const islandH = Math.round(Math.min(height * 0.16, Math.max(78, width * 0.2)));
+    const insetH = Math.round(Math.min(height * 0.2, Math.max(96, width * 0.28)));
     const boxW = (width - gap * 4) / 3;
-    const y = height - insetH - gap;
+    const islandsY = height - islandH - gap;
+    const countyY = islandsY - gap - insetH;
     return {
       wide: false,
-      main: { x: gap, y: gap, w: width - gap * 2, h: height - insetH - gap * 3 },
+      main: { x: gap, y: gap, w: width - gap * 2, h: Math.max(40, countyY - gap * 2) },
       insets: [
-        { key: "penghu", name: "澎湖縣", x: gap, y, w: boxW, h: insetH },
-        { key: "kinmen", name: "金門縣", x: gap * 2 + boxW, y, w: boxW, h: insetH },
-        { key: "lienchiang", name: "連江縣", x: gap * 3 + boxW * 2, y, w: boxW, h: insetH },
+        { key: "penghu", name: "澎湖縣", x: gap, y: countyY, w: boxW, h: insetH },
+        { key: "kinmen", name: "金門縣", x: gap * 2 + boxW, y: countyY, w: boxW, h: insetH },
+        { key: "lienchiang", name: "連江縣", x: gap * 3 + boxW * 2, y: countyY, w: boxW, h: insetH },
       ],
+      islands: { x: gap, y: islandsY, w: width - gap * 2, h: islandH },
     };
+  }
+
+  function splitCallout(polygons) {
+    const body = largestPolygon(polygons);
+    const center = ringCentroid(body[0]);
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    body[0].forEach(([x, y]) => {
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    });
+    const span = Math.max(maxX - minX, maxY - minY) || 1;
+    const near = [];
+    const far = [];
+    polygons.forEach((polygon) => {
+      const point = ringCentroid(polygon[0]);
+      const distance = Math.hypot(point[0] - center[0], point[1] - center[1]);
+      if (polygon !== body && distance > span * 0.75) far.push(polygon);
+      else near.push(polygon);
+    });
+    return { near, far };
+  }
+
+  function islandCells(box) {
+    const specs = [
+      { key: "liuqiu", name: "小琉球" },
+      { key: "ludao", name: "綠島" },
+      { key: "lanyu", name: "蘭嶼" },
+    ];
+    const gap = Math.max(4, Math.min(8, box.w * 0.02));
+    const cellW = (box.w - gap * (specs.length - 1)) / specs.length;
+    return specs.map((spec, index) => ({
+      key: spec.key,
+      name: spec.name,
+      x: box.x + index * (cellW + gap),
+      y: box.y,
+      w: cellW,
+      h: box.h,
+    }));
   }
 
   function contentOf(box) {
@@ -555,7 +667,7 @@
       width: String(width),
       height: String(height),
       role: "img",
-      "aria-label": "臺灣二十二縣市地圖",
+      "aria-label": "臺灣二十五個地區地圖",
     });
     if (state.spinning) svg.classList.add("is-spinning");
 
@@ -608,6 +720,46 @@
     }, svg);
     wuqiuLabel.textContent = "烏坵";
 
+    const cells = islandCells(layout.islands);
+    const cellByKey = {};
+    cells.forEach((cell) => {
+      cellByKey[cell.key] = cell;
+      el("rect", {
+        class: "inset-frame",
+        "data-inset": cell.key,
+        x: cell.x,
+        y: cell.y,
+        width: cell.w,
+        height: cell.h,
+        rx: 12,
+      }, svg);
+    });
+    const calloutPaths = {};
+    state.counties.forEach((county) => {
+      if (!county.callout) return;
+      const cell = cellByKey[county.callout];
+      const parts = splitCallout(county.calloutPolygons);
+      const sat = parts.far.length ? Math.min(36, cell.w * 0.46, cell.h * 0.34) : 0;
+      calloutPaths[county.callout] = {
+        near: fitPath(
+          [asFeature(parts.near)].filter(Boolean),
+          cell.x + 7,
+          cell.y + 20,
+          cell.x + cell.w - 7 - (sat ? sat * 0.15 : 0),
+          cell.y + cell.h - 7,
+        ),
+        far: sat ? fitPath(
+          [asFeature(parts.far)].filter(Boolean),
+          cell.x + cell.w - sat - 4,
+          cell.y + cell.h - sat - 4,
+          cell.x + cell.w - 4,
+          cell.y + cell.h - 4,
+        ) : null,
+        nearPolys: parts.near,
+        farPolys: parts.far,
+      };
+    });
+
     [[dongyinBox, "東引"], [juguangBox, "莒光"]].forEach(([box, caption]) => {
       el("rect", {
         class: "wuqiu-frame",
@@ -632,6 +784,13 @@
     const ordered = state.counties.slice().sort((a, b) => b.area - a.area);
     ordered.forEach((county) => {
       let d = "";
+      if (county.callout) {
+        const drawn = calloutPaths[county.callout];
+        const near = asFeature(drawn.nearPolys);
+        const far = asFeature(drawn.farPolys);
+        if (near && drawn.near) d += drawn.near(near) || "";
+        if (far && drawn.far) d += drawn.far(far) || "";
+      }
       ["main", "penghu", "kinmen", "wuqiu"].forEach((key) => {
         const feature = asFeature(county.buckets[key]);
         if (!feature || !paths[key]) return;
@@ -657,6 +816,20 @@
     });
 
     state.counties.forEach((county) => {
+      if (county.callout) {
+        const cell = cellByKey[county.callout];
+        const label = el("text", {
+          class: "county-label",
+          "data-name": county.name,
+          x: (cell.x + cell.w / 2).toFixed(1),
+          y: (cell.y + 13).toFixed(1),
+          "text-anchor": "middle",
+          "font-size": "11",
+        }, svg);
+        label.textContent = county.name;
+        nodes.get(county.id).label = label;
+        return;
+      }
       const region = county.buckets.main.length
         ? "main"
         : county.buckets.kinmen.length
@@ -824,11 +997,11 @@
     else if (state.history.length) setDrawFace("again");
     else setDrawFace("idle");
     if (norepeat.checked && eligible.length === 0) {
-      hint.textContent = "二十二個縣市都已抽出";
+      hint.textContent = "二十五個地區都已抽出";
     } else if (norepeat.checked) {
-      hint.textContent = "已抽出的縣市不會再被抽到";
+      hint.textContent = "已抽出的地區不會再被抽到";
     } else {
-      hint.textContent = "每一輪都從全部縣市抽出";
+      hint.textContent = "每一輪都從全部地區抽出";
     }
   }
 
@@ -976,10 +1149,15 @@
       statusEl.textContent = "地圖載入失敗，請重新整理";
       return;
     }
-    const response = await fetch("data/counties-10t.json");
+    const [response, islandResponse] = await Promise.all([
+      fetch("./data/counties-10t.json"),
+      fetch("./data/islands.json"),
+    ]);
     if (!response.ok) throw new Error("map data " + response.status);
+    if (!islandResponse.ok) throw new Error("island data " + islandResponse.status);
     const topo = await response.json();
-    state.counties = buildCounties(topo);
+    const islands = await islandResponse.json();
+    state.counties = buildCounties(topo, islands);
     statusEl.remove();
     syncControls();
     scheduleRender();

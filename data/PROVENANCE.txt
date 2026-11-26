@@ -8,3 +8,12 @@ the Interior shapefile 直轄市、縣市界線 (TWD97 經緯度). Geometry is u
 WGS84, quantized and topologically simplified by taiwan-atlas.
 
 License: MIT (see taiwan-atlas.LICENSE).
+
+islands.json
+Source package: taiwan-atlas 2021.9.20 towns-10t.json
+https://cdn.jsdelivr.net/npm/taiwan-atlas@2021.9.20/towns-10t.json
+
+GeoJSON extracted, unmodified, for three townships:
+屏東縣琉球鄉 (drawn as 小琉球), 臺東縣綠島鄉 (綠島), 臺東縣蘭嶼鄉 (蘭嶼).
+The page drops the matching polygons out of 屏東縣 and 臺東縣 so those
+counties are the remainder. Same license as counties-10t.json.
