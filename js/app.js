@@ -383,8 +383,8 @@
   }
 
   function computeLayout(width, height) {
-    const gap = Math.max(10, Math.round(Math.min(width, height) * 0.016));
-    const wide = width / height > 0.98;
+    const gap = Math.max(8, Math.round(Math.min(width, height) * 0.016));
+    const wide = width / height > 0.98 && height >= 640;
     if (wide) {
       const insetW = Math.round(Math.min(width * 0.24, Math.max(168, height * 0.34)));
       const innerH = height - gap * 2;
@@ -406,8 +406,14 @@
         islands: { x: gap, y: gap + (boxH + gap) * 3, w: insetW, h: islandH },
       };
     }
-    const islandH = Math.round(Math.min(height * 0.16, Math.max(78, width * 0.2)));
-    const insetH = Math.round(Math.min(height * 0.2, Math.max(96, width * 0.28)));
+    let islandH = Math.round(Math.min(120, Math.max(44, height * 0.18)));
+    let insetH = Math.round(Math.min(150, Math.max(52, height * 0.22)));
+    const chrome = islandH + insetH + gap * 3;
+    if (chrome > height * 0.58) {
+      const scale = (height * 0.5) / chrome;
+      islandH = Math.max(36, Math.round(islandH * scale));
+      insetH = Math.max(40, Math.round(insetH * scale));
+    }
     const boxW = (width - gap * 4) / 3;
     const islandsY = height - islandH - gap;
     const countyY = islandsY - gap - insetH;
@@ -467,9 +473,11 @@
   }
 
   function contentOf(box) {
-    const header = Math.min(22, Math.max(16, box.h * 0.14));
-    const padX = Math.min(10, Math.max(6, box.w * 0.045));
-    const padB = Math.min(8, Math.max(5, box.h * 0.04));
+    const header = box.h < 64
+      ? Math.max(9, Math.min(12, box.h * 0.34))
+      : Math.min(22, Math.max(16, box.h * 0.14));
+    const padX = Math.min(10, Math.max(4, box.w * 0.045));
+    const padB = Math.min(8, Math.max(3, box.h * 0.04));
     return {
       header,
       inner: {
@@ -482,7 +490,19 @@
   }
 
   function fitPath(features, x0, y0, x1, y1) {
-    if (!features.length || x1 - x0 < 8 || y1 - y0 < 8) return null;
+    if (!features.length) return null;
+    if (x1 < x0) { const swap = x0; x0 = x1; x1 = swap; }
+    if (y1 < y0) { const swap = y0; y0 = y1; y1 = swap; }
+    if (x1 - x0 < 8) {
+      const mid = (x0 + x1) / 2;
+      x0 = mid - 4;
+      x1 = mid + 4;
+    }
+    if (y1 - y0 < 8) {
+      const mid = (y0 + y1) / 2;
+      y0 = mid - 4;
+      y1 = mid + 4;
+    }
     const projection = d3.geoMercator().fitExtent(
       [[x0, y0], [x1, y1]],
       { type: "FeatureCollection", features },
@@ -838,6 +858,20 @@
             ? "penghu"
             : "lienchiang";
       const pathGen = paths[region];
+      if (!pathGen) {
+        const box = region === "main" ? layout.main : byKey[region];
+        const label = el("text", {
+          class: "county-label",
+          "data-name": county.name,
+          x: (box.x + box.w / 2).toFixed(1),
+          y: (box.y + box.h / 2).toFixed(1),
+          "text-anchor": "middle",
+          "font-size": "11",
+        }, svg);
+        label.textContent = county.name;
+        nodes.get(county.id).label = label;
+        return;
+      }
       const projected = pathGen.projection()(county.anchor);
       const bounds = pathGen.bounds(asFeature([county.labelPolygon]));
       const inset = region !== "main";
