@@ -1217,6 +1217,34 @@
     showPlace(winner.name);
   }
 
+  const BOOKING_QUERY = {
+    基隆市: "Keelung",
+    臺北市: "Taipei",
+    新北市: "Banqiao",
+    桃園市: "Taoyuan",
+    新竹市: "Hsinchu",
+    新竹縣: "Hsinchu",
+    苗栗縣: "Miaoli",
+    臺中市: "Taichung",
+    彰化縣: "Changhua",
+    南投縣: "Nantou",
+    雲林縣: "Yunlin",
+    嘉義市: "Chiayi",
+    嘉義縣: "Chiayi",
+    臺南市: "Tainan",
+    高雄市: "Kaohsiung",
+    屏東縣: "Pingtung",
+    宜蘭縣: "Yilan",
+    花蓮縣: "Hualien",
+    臺東縣: "Taitung",
+    澎湖縣: "Penghu",
+    金門縣: "Kinmen",
+    連江縣: "Matsu",
+    小琉球: "Xiaoliuqiu",
+    綠島: "Ludao",
+    蘭嶼: "Lanyu",
+  };
+
   const PLACE_QUERY = {
     基隆市: "基隆",
     臺北市: "台北",
@@ -1483,7 +1511,7 @@
         searchType: "CT",
       })],
       ["Booking.com", withParams("https://www.booking.com/searchresults.zh-tw.html", {
-        ss: query,
+        ss: BOOKING_QUERY[county] || query,
         checkin: start,
         checkout: end,
         group_adults: "2",
@@ -1526,6 +1554,8 @@
       const img = document.createElement("img");
       img.src = safeUrl(row.picture);
       img.alt = "";
+      img.loading = "lazy";
+      img.addEventListener("error", () => img.remove());
       card.appendChild(img);
     }
     const heading = document.createElement("h3");
@@ -1652,7 +1682,7 @@
     statusEl.remove();
     syncControls();
     scheduleRender();
-    state.eventsPromise = fetch("./data/events.json?v=11", { cache: "no-cache" })
+    state.eventsPromise = fetch("./data/events.json?v=12", { cache: "no-cache" })
       .then((response) => (response.ok ? response.json() : null))
       .then((data) => {
         state.eventsData = data && Array.isArray(data.events) ? data : null;
@@ -1664,7 +1694,7 @@
         state.eventsFailed = true;
         return null;
       });
-    state.spotPromise = fetch("./data/spots.json?v=11", { cache: "no-cache" })
+    state.spotPromise = fetch("./data/spots.json?v=12", { cache: "no-cache" })
       .then((spotResponse) => (spotResponse.ok ? spotResponse.json() : null))
       .then((data) => {
         state.spotData = data && Array.isArray(data.spots) ? data : null;
