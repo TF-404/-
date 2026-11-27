@@ -677,27 +677,44 @@ body {
   gap: 8px;
 }
 
-.event {
+a.event {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
   margin: 0;
   padding: 12px 14px;
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.03);
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+a.event:hover,
+a.event:focus,
+a.event:focus-visible {
+  border-color: #e0b15a;
+  background: rgba(224, 177, 90, 0.1);
+  outline: 2px solid #e0b15a;
+  outline-offset: 2px;
 }
 
 .event h3 {
   margin: 0 0 6px;
+  color: #f4f7fb;
   font-size: 1rem;
   font-weight: 700;
   line-height: 1.45;
 }
 
-.event a {
-  color: #f4f7fb;
-  text-decoration: none;
+.event-go {
+  margin-top: 8px;
+  color: #e0b15a;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
 }
-
-.event a:hover { text-decoration: underline; }
 
 .event p {
   margin: 0;

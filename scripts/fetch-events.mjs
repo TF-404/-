@@ -165,14 +165,44 @@ function categorize(code, text) {
 
 function safeHttp(value) {
   const raw = String(value || "").trim();
-  if (!/^https?:\/\//i.test(raw)) return "";
+  const found = raw.match(/https?:\/\/[^\s<>"']+/i);
+  const candidate = found ? found[0].replace(/[),.;]+$/, "") : "";
+  if (!candidate) return "";
   try {
-    const url = new URL(raw);
+    const url = new URL(candidate);
     if (url.protocol === "http:" || url.protocol === "https:") return url.href;
   } catch {
     return "";
   }
   return "";
+}
+
+function culturePage(uid) {
+  const id = String(uid || "").trim();
+  if (!id || /[\s<>]/.test(id)) return "";
+  return "https://cloud.culture.tw/frontsite/inquiry/eventInquiryAction.do?method=doEventDetail&uid=" + encodeURIComponent(id);
+}
+
+function googleSearch(title, county) {
+  const query = [title, county].filter(Boolean).join(" ");
+  return "https://www.google.com/search?q=" + encodeURIComponent(query);
+}
+
+function chooseLink(show, title, county) {
+  const sourceWebPromote = safeHttp(show.sourceWebPromote);
+  const webSales = safeHttp(show.webSales);
+  const uid = String(show.UID || "").trim();
+  let url = "";
+  let link = "search";
+  if (sourceWebPromote || webSales) {
+    url = sourceWebPromote || webSales;
+    link = "official";
+  } else {
+    url = culturePage(uid);
+    link = url ? "culture" : "search";
+  }
+  if (!url) url = googleSearch(title, county);
+  return { url, link, sourceWebPromote, webSales, uid };
 }
 
 async function fetchCategory(id) {
@@ -211,10 +241,6 @@ function collect(shows, window) {
     const showEnd = parseDate(show.endDate) || showStart;
     const infos = Array.isArray(show.showInfo) && show.showInfo.length ? show.showInfo : [null];
     const description = stripHtml(show.descriptionFilterHtml).slice(0, 400);
-    const page = safeHttp(show.sourceWebPromote)
-      || (show.UID
-        ? "https://cloud.culture.tw/frontsite/trans/SearchShowAction.do?method=doFindById&UID=" + encodeURIComponent(show.UID)
-        : SOURCE.url);
     for (const info of infos) {
       const start = parseDate(info && info.time) || showStart;
       const end = parseDate(info && info.endTime) || showEnd || start;
@@ -233,6 +259,7 @@ function collect(shows, window) {
       const venue = String((info && info.locationName) || show.showUnit || "").replace(/\s+/g, " ").trim();
       const address = String((info && info.location) || "").replace(/\s+/g, " ").trim();
       const category = categorize(show.category, title + venue + description);
+      const chosen = chooseLink(show, title, county);
       events.push({
         title,
         start,
@@ -241,7 +268,11 @@ function collect(shows, window) {
         address,
         county,
         category,
-        url: page,
+        url: chosen.url,
+        link: chosen.link,
+        sourceWebPromote: chosen.sourceWebPromote,
+        webSales: chosen.webSales,
+        uid: chosen.uid,
       });
     }
   }
@@ -257,7 +288,8 @@ function dedupe(events) {
       seen.set(key, event);
       continue;
     }
-    if (prev.category === "其他" && event.category !== "其他") seen.set(key, event);
+    const rank = (item) => (item.category === "其他" ? 0 : 10) + (item.link === "official" ? 2 : item.link === "culture" ? 1 : 0);
+    if (rank(event) > rank(prev)) seen.set(key, event);
   }
   return [...seen.values()].sort((a, b) =>
     a.county.localeCompare(b.county, "zh-Hant")
@@ -299,8 +331,11 @@ async function main() {
   const counts = {};
   for (const event of unique) counts[event.county] = (counts[event.county] || 0) + 1;
   const ranked = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  const links = { official: 0, culture: 0, search: 0 };
+  for (const event of unique) links[event.link] = (links[event.link] || 0) + 1;
   console.log("window " + window.from + " .. " + window.to);
   console.log("kept " + unique.length + ", unmapped showings " + skipped);
+  console.log("links official " + links.official + ", culture " + links.culture + ", search " + (links.search || 0));
   console.log("counties " + ranked.map(([name, n]) => name + " " + n).join(", "));
 }
 

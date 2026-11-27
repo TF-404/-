@@ -1253,21 +1253,31 @@
     return "";
   }
 
+  function culturePage(uid) {
+    const id = String(uid || "").trim();
+    if (!id || /[\s<>]/.test(id)) return "";
+    return "https://cloud.culture.tw/frontsite/inquiry/eventInquiryAction.do?method=doEventDetail&uid=" + encodeURIComponent(id);
+  }
+
+  function eventHref(row) {
+    const official = safeUrl(row.sourceWebPromote) || safeUrl(row.webSales);
+    if (official) return official;
+    const culture = culturePage(row.uid);
+    if (culture) return culture;
+    const stored = safeUrl(row.url);
+    if (stored && stored.indexOf("method=doFindById") === -1) return stored;
+    const query = [row.title, row.county].filter(Boolean).join(" ");
+    return "https://www.google.com/search?q=" + encodeURIComponent(query);
+  }
+
   function eventCard(row) {
-    const card = document.createElement("article");
+    const card = document.createElement("a");
     card.className = "event";
+    card.href = eventHref(row);
+    card.target = "_blank";
+    card.rel = "noopener noreferrer";
     const heading = document.createElement("h3");
-    const href = safeUrl(row.url);
-    if (href) {
-      const link = document.createElement("a");
-      link.href = href;
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-      link.textContent = row.title;
-      heading.appendChild(link);
-    } else {
-      heading.textContent = row.title;
-    }
+    heading.textContent = row.title;
     const meta = document.createElement("p");
     const venue = row.venue ? " · " + row.venue : "";
     meta.textContent = formatSpan(row.start, row.end) + venue;
@@ -1277,6 +1287,10 @@
       place.textContent = row.address;
       card.appendChild(place);
     }
+    const go = document.createElement("span");
+    go.className = "event-go";
+    go.textContent = "查看活動 ↗";
+    card.appendChild(go);
     return card;
   }
 
@@ -1416,7 +1430,7 @@
     statusEl.remove();
     syncControls();
     scheduleRender();
-    state.eventsPromise = fetch("./data/events.json", { cache: "no-cache" })
+    state.eventsPromise = fetch("./data/events.json?v=10", { cache: "no-cache" })
       .then((response) => (response.ok ? response.json() : null))
       .then((data) => {
         state.eventsData = data && Array.isArray(data.events) ? data : null;
