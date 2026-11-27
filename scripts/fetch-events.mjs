@@ -9,6 +9,8 @@
 import { writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadTownIndex, matchTown, matchTownLoose } from "./towns.mjs";
+import { fetchExtraEvents } from "./public-events.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(ROOT, "data", "events.json");
@@ -231,7 +233,7 @@ async function mapPool(items, limit, fn) {
   return out;
 }
 
-function collect(shows, window) {
+function collect(shows, window, towns) {
   const events = [];
   let skipped = 0;
   for (const show of shows) {
@@ -260,6 +262,7 @@ function collect(shows, window) {
       const address = String((info && info.location) || "").replace(/\s+/g, " ").trim();
       const category = categorize(show.category, title + venue + description);
       const chosen = chooseLink(show, title, county);
+      const town = matchTown([address, venue, title].join(" "), county, towns);
       events.push({
         title,
         start,
@@ -267,6 +270,8 @@ function collect(shows, window) {
         venue,
         address,
         county,
+        town,
+        source: "文化部",
         category,
         url: chosen.url,
         link: chosen.link,
@@ -277,6 +282,11 @@ function collect(shows, window) {
     }
   }
   return { events, skipped };
+}
+
+function titleKey(event) {
+  const title = norm(event.title).toLowerCase();
+  return title + "|" + event.start;
 }
 
 function dedupe(events) {
@@ -314,8 +324,32 @@ async function main() {
       merged.push(show);
     }
   }
-  const { events, skipped } = collect(merged, window);
-  const unique = dedupe(events);
+  const towns = loadTownIndex();
+  const { events, skipped } = collect(merged, window, towns);
+  const culture = dedupe(events);
+  const extra = await fetchExtraEvents({
+    window,
+    towns,
+    locate,
+    matchTown: matchTownLoose,
+    overlaps,
+  });
+  const seen = new Set(culture.map((event) => titleKey(event)));
+  const mergedEvents = culture.slice();
+  let dropped = 0;
+  for (const event of extra.events) {
+    const key = titleKey(event);
+    if (seen.has(key)) {
+      dropped += 1;
+      continue;
+    }
+    seen.add(key);
+    mergedEvents.push(event);
+  }
+  const unique = mergedEvents.sort((a, b) =>
+    a.county.localeCompare(b.county, "zh-Hant")
+    || a.start.localeCompare(b.start)
+    || a.title.localeCompare(b.title, "zh-Hant"));
   if (!unique.length) {
     throw new Error("no events overlapped " + window.from + ".." + window.to);
   }
@@ -323,7 +357,8 @@ async function main() {
     updated: taipeiStamp(),
     timezone: "Asia/Taipei",
     window,
-    sources: [SOURCE],
+    sources: [SOURCE].concat(extra.sources),
+    failures: extra.failures,
     categories: CATEGORIES,
     events: unique,
   };
@@ -334,7 +369,30 @@ async function main() {
   const links = { official: 0, culture: 0, search: 0 };
   for (const event of unique) links[event.link] = (links[event.link] || 0) + 1;
   console.log("window " + window.from + " .. " + window.to);
-  console.log("kept " + unique.length + ", unmapped showings " + skipped);
+  const withTown = unique.filter((event) => event.town).length;
+  console.log("kept " + unique.length + ", culture " + culture.length + ", extra kept " + (unique.length - culture.length) + ", extra dupes " + dropped + ", unmapped showings " + skipped);
+  console.log("town matched " + withTown + " / " + unique.length);
+  const weekEnd = shiftISO(window.from, 6);
+  const thisWeek = unique.filter((event) => event.start <= weekEnd && (event.end || event.start) >= window.from);
+  const bySource = {};
+  for (const event of thisWeek) {
+    const name = event.source || "文化部";
+    bySource[name] = (bySource[name] || 0) + 1;
+  }
+  console.log("this week " + window.from + " .. " + weekEnd + " " + thisWeek.length);
+  console.log("this week by source " + Object.entries(bySource).map(([name, n]) => name + " " + n).join(", "));
+  const sampleCounties = ["臺北市", "臺中市", "高雄市", "金門縣", "小琉球"];
+  for (const county of sampleCounties) {
+    const rows = thisWeek.filter((event) => event.county === county);
+    const sources = {};
+    for (const event of rows) sources[event.source || "文化部"] = (sources[event.source || "文化部"] || 0) + 1;
+    console.log("sample " + county + " " + rows.length + " " + JSON.stringify(sources));
+  }
+  if (extra.failures.length) {
+    for (const failure of extra.failures) {
+      console.log("FAILED " + failure.name + " HTTP " + failure.status + " " + failure.reason + " " + failure.url);
+    }
+  }
   console.log("links official " + links.official + ", culture " + links.culture + ", search " + (links.search || 0));
   console.log("counties " + ranked.map(([name, n]) => name + " " + n).join(", "));
 }

@@ -66,6 +66,7 @@
   const drawBtn = document.getElementById("draw");
   const resetBtn = document.getElementById("reset");
   const norepeat = document.getElementById("norepeat");
+  const townToggle = document.getElementById("town-draw");
   const hint = document.getElementById("hint");
   const historyEl = document.getElementById("history");
   const eventsEl = document.getElementById("events");
@@ -74,6 +75,7 @@
   const eventsTabs = document.getElementById("events-tabs");
   const eventsList = document.getElementById("events-list");
   const eventsEmpty = document.getElementById("events-empty");
+  const eventsWiden = document.getElementById("events-widen");
   const eventsCredit = document.getElementById("events-credit");
   const lookupEl = document.getElementById("lookup");
   const paneEvents = document.getElementById("pane-events");
@@ -83,6 +85,7 @@
   const spotsList = document.getElementById("spots-list");
   const spotsMore = document.getElementById("spots-more");
   const spotsEmpty = document.getElementById("spots-empty");
+  const spotsWiden = document.getElementById("spots-widen");
   const spotsCredit = document.getElementById("spots-credit");
   const stayLinks = document.getElementById("stay-links");
 
@@ -116,6 +119,9 @@
     nodes: new Map(),
     renderQueued: false,
     paths: null,
+    towns: [],
+    townMode: false,
+    placeTown: "",
     eventsData: null,
     eventsFailed: false,
     eventsCounty: "",
@@ -407,6 +413,56 @@
       throw new Error("小琉球、綠島、蘭嶼沒有從屏東縣與臺東縣拆開");
     }
     return counties;
+  }
+
+  function buildTowns(topo, islands) {
+    const islandFeatures = islands.features || [];
+    const collection = topojson.feature(topo, topo.objects.towns);
+    const counts = new Map();
+    collection.features.forEach((feature) => {
+      const name = officialName(feature.properties.TOWNNAME);
+      counts.set(name, (counts.get(name) || 0) + 1);
+    });
+    return collection.features.map((feature) => {
+      const name = officialName(feature.properties.TOWNNAME);
+      const county = officialName(feature.properties.COUNTYNAME);
+      const buckets = { main: [], penghu: [], kinmen: [], wuqiu: [], lienchiang: [] };
+      const calloutPolys = { liuqiu: [], ludao: [], lanyu: [] };
+      polygonsOf(feature).forEach((polygon) => {
+        const centroid = ringCentroid(polygon[0]);
+        const island = islandFeatures.find((item) => pointInFeature(centroid[0], centroid[1], item));
+        if (island) {
+          calloutPolys[island.properties.id].push(polygon);
+          return;
+        }
+        buckets[classify(centroid[0], centroid[1])].push(polygon);
+      });
+      let place = county;
+      const aliases = [name];
+      if (name === "琉球鄉") {
+        place = "小琉球";
+        aliases.push("小琉球", "琉球嶼");
+      } else if (name === "綠島鄉") {
+        place = "綠島";
+        aliases.push("綠島");
+      } else if (name === "蘭嶼鄉") {
+        place = "蘭嶼";
+        aliases.push("蘭嶼");
+      }
+      return {
+        id: "t" + feature.properties.TOWNCODE,
+        name,
+        county,
+        place,
+        aliases,
+        ambiguous: (counts.get(name) || 0) > 1,
+        buckets,
+        calloutPolys,
+        color: COLORS[place] || COLORS[county] || "#4d6a88",
+        d: "",
+        node: null,
+      };
+    });
   }
 
   function computeLayout(width, height) {
@@ -739,6 +795,7 @@
       "aria-label": "臺灣二十五個地區地圖",
     });
     if (state.spinning) svg.classList.add("is-spinning");
+    if (state.townMode) svg.classList.add("is-towns");
 
     const defs = el("defs", null, svg);
     const gradient = el("radialGradient", {
@@ -884,6 +941,49 @@
       nodes.set(county.id, { path, label: null });
     });
 
+    function trace(buckets, calloutPolys) {
+      let drawn = "";
+      ["main", "penghu", "kinmen", "wuqiu"].forEach((key) => {
+        const feature = asFeature(buckets[key] || []);
+        if (feature && paths[key]) drawn += paths[key](feature) || "";
+      });
+      const lienParts = splitLienchiang(buckets.lienchiang || []);
+      [["main", "lienchiang"], ["dongyin", "dongyin"], ["liang", "liang"], ["juguang", "juguang"]].forEach(([part, key]) => {
+        const feature = asFeature(lienParts[part]);
+        if (feature && paths[key]) drawn += paths[key](feature) || "";
+      });
+      if (calloutPolys) {
+        Object.keys(calloutPolys).forEach((key) => {
+          const polys = calloutPolys[key];
+          if (!polys.length || !calloutPaths[key]) return;
+          const parts = splitCallout(polys);
+          const near = asFeature(parts.near);
+          const far = asFeature(parts.far);
+          if (near && calloutPaths[key].near) drawn += calloutPaths[key].near(near) || "";
+          if (far && calloutPaths[key].far) drawn += calloutPaths[key].far(far) || "";
+        });
+      }
+      return drawn;
+    }
+
+    const townLayer = el("g", { class: "towns" }, svg);
+    state.towns.forEach((town) => {
+      town.d = trace(town.buckets, town.calloutPolys);
+      town.node = null;
+      if (!town.d) return;
+      const path = el("path", {
+        class: "town",
+        d: town.d,
+        "data-town": town.id,
+        "data-name": town.name,
+        "data-county": town.county,
+        "data-place": town.place,
+      }, townLayer);
+      const title = el("title", null, path);
+      title.textContent = town.county + town.name;
+      town.node = path;
+    });
+
     state.counties.forEach((county) => {
       if (county.callout) {
         const cell = cellByKey[county.callout];
@@ -976,10 +1076,17 @@
     return { g, glow, core };
   }
 
+  function frameShape(id) {
+    if (!id) return "";
+    const town = state.towns.find((item) => item.id === id);
+    if (town) return town.d || "";
+    const county = state.counties.find((item) => item.id === id);
+    return county && county.d ? county.d : "";
+  }
+
   function paintFrame(id, fadeMs) {
     if (!state.spots) return;
-    const county = id ? state.counties.find((item) => item.id === id) : null;
-    const d = county && county.d ? county.d : "";
+    const d = frameShape(id);
     if (!d) {
       state.spots.forEach((spot) => {
         spot.g.classList.remove("is-shown");
@@ -1046,6 +1153,28 @@
     return state.counties.filter((county) => !drawn.has(county.id));
   }
 
+  function townInScope(town, scope) {
+    if (!scope) return true;
+    return town.place === scope || town.county === scope;
+  }
+
+  function drawPool() {
+    if (!state.townMode) return eligibleCounties();
+    const scope = lookupEl.value;
+    let towns = state.towns.filter((town) => town.d && townInScope(town, scope));
+    if (norepeat.checked) {
+      const drawn = new Set(state.history.map((item) => item.id));
+      towns = towns.filter((town) => !drawn.has(town.id));
+    }
+    return towns;
+  }
+
+  function syncLookupScope() {
+    const first = lookupEl.options[0];
+    if (!first) return;
+    first.textContent = state.townMode ? "全台" : "選擇縣市";
+  }
+
   function applyCountyStyles() {
     const drawn = new Set(state.history.map((item) => item.id));
     state.counties.forEach((county) => {
@@ -1058,7 +1187,20 @@
       node.label.classList.toggle("is-spent", spent);
       node.path.setAttribute("fill", isWinner ? county.hot : county.color);
     });
-    if (state.svg) state.svg.classList.toggle("is-spinning", state.spinning);
+    if (state.townMode && norepeat.checked) {
+      const drawn = new Set(state.history.map((item) => item.id));
+      state.towns.forEach((town) => {
+        if (town.node) town.node.classList.toggle("is-spent", drawn.has(town.id));
+      });
+    } else {
+      state.towns.forEach((town) => {
+        if (town.node) town.node.classList.remove("is-spent");
+      });
+    }
+    if (state.svg) {
+      state.svg.classList.toggle("is-spinning", state.spinning);
+      state.svg.classList.toggle("is-towns", state.townMode);
+    }
   }
 
   function setDrawFace(face) {
@@ -1070,17 +1212,25 @@
   }
 
   function syncControls() {
-    const eligible = eligibleCounties();
+    const eligible = drawPool();
     const blocked = state.spinning || eligible.length === 0;
     drawBtn.disabled = blocked || !state.counties.length;
     resetBtn.disabled = state.spinning || state.history.length === 0;
     norepeat.disabled = state.spinning;
+    townToggle.disabled = state.spinning || !state.towns.length;
     lookupEl.disabled = state.spinning;
+    syncLookupScope();
     if (state.spinning) setDrawFace("spin");
     else if (eligible.length === 0) setDrawFace("done");
     else if (state.history.length) setDrawFace("again");
     else setDrawFace("idle");
-    if (norepeat.checked && eligible.length === 0) {
+    const scope = lookupEl.value;
+    if (state.townMode) {
+      if (norepeat.checked && eligible.length === 0) hint.textContent = "這一輪的鄉鎮市區都已抽出";
+      else if (norepeat.checked) hint.textContent = "已抽出的鄉鎮市區不會再被抽到";
+      else if (scope) hint.textContent = "只抽" + scope + "的鄉鎮市區";
+      else hint.textContent = "每一輪都從全部鄉鎮市區抽出";
+    } else if (norepeat.checked && eligible.length === 0) {
       hint.textContent = "二十五個地區都已抽出";
     } else if (norepeat.checked) {
       hint.textContent = "已抽出的地區不會再被抽到";
@@ -1183,7 +1333,7 @@
 
   async function spin() {
     if (state.spinning) return;
-    const eligible = eligibleCounties();
+    const eligible = drawPool();
     if (!eligible.length) return;
     if (!window.crypto || !crypto.getRandomValues) {
       hint.textContent = "這個瀏覽器無法提供公平的亂數";
@@ -1202,11 +1352,17 @@
       if (hops[i].gap > 0) await sleep(hops[i].gap);
     }
     state.spinning = false;
-    state.winnerId = winner.id;
     state.frameId = winner.id;
-    state.history.push({ id: winner.id, name: winner.name, color: winner.color });
+    if (state.townMode) {
+      const place = state.counties.find((county) => county.name === winner.place);
+      state.winnerId = place ? place.id : null;
+      state.history.push({ id: winner.id, name: winner.county + winner.name, color: winner.color });
+    } else {
+      state.winnerId = winner.id;
+      state.history.push({ id: winner.id, name: winner.name, color: winner.color });
+    }
     applyCountyStyles();
-    showBanner(winner.name);
+    showBanner(state.townMode ? winner.county + winner.name : winner.name);
     celebrate();
     renderHistory();
     syncControls();
@@ -1214,7 +1370,8 @@
       state.renderDeferred = false;
       scheduleRender();
     }
-    showPlace(winner.name);
+    if (state.townMode) showTown(winner);
+    else showPlace(winner.name);
   }
 
   const BOOKING_QUERY = {
@@ -1388,10 +1545,13 @@
       place.textContent = row.address;
       card.appendChild(place);
     }
+    const tag = document.createElement("span");
+    tag.className = "event-source";
+    tag.textContent = row.source || "文化部";
     const go = document.createElement("span");
     go.className = "event-go";
     go.textContent = "查看活動 ↗";
-    card.appendChild(go);
+    card.append(tag, go);
     return card;
   }
 
@@ -1400,16 +1560,51 @@
     const names = (data.sources || []).map((source) => source.name).filter(Boolean);
     const source = names.length ? names.join("、") : "文化部藝文活動開放資料";
     const when = formatUpdated(data.updated);
-    return "資料來源：" + source + (when ? " · 更新於 " + when : "");
+    const failed = (data.failures || []).map((item) => item.name).filter(Boolean);
+    const note = failed.length ? " · " + failed.join("、") + "公開頁這次無法讀取" : "";
+    return "資料來源：" + source + (when ? " · 更新於 " + when : "") + note;
+  }
+
+  function normPlace(value) {
+    return String(value || "").replaceAll("台", "臺").replace(/\s+/g, "");
+  }
+
+  function activeTown() {
+    if (!state.placeTown) return null;
+    return state.towns.find((town) => town.id === state.placeTown) || null;
+  }
+
+  function rowMatchesTown(row, town) {
+    const blob = normPlace([row.town, row.address, row.venue, row.title, row.name].filter(Boolean).join(""));
+    const hit = town.aliases.some((alias) => blob.includes(normPlace(alias)));
+    if (!hit) return false;
+    if (row.county === town.place || row.county === town.county) return true;
+    return blob.includes(normPlace(town.county)) || blob.includes(normPlace(town.place));
+  }
+
+  function placeHeading(county) {
+    const town = activeTown();
+    return town ? town.county + town.name : county;
+  }
+
+  function showWiden(button, empty) {
+    const town = activeTown();
+    const show = Boolean(town && empty);
+    button.hidden = !show;
+    if (show) button.textContent = "看整個" + town.place;
   }
 
   function renderEvents(county) {
     const data = state.eventsData;
     const week = currentWeek();
+    const town = activeTown();
     const categories = (data && data.categories) || [];
-    const rows = ((data && data.events) || []).filter((event) =>
-      event.county === county && event.start <= week.end && (event.end || event.start) >= week.start
-    );
+    const rows = ((data && data.events) || []).filter((event) => {
+      if (event.county !== county) return false;
+      if (event.start > week.end || (event.end || event.start) < week.start) return false;
+      if (town && !rowMatchesTown(event, town)) return false;
+      return true;
+    });
     rows.sort((a, b) => a.start.localeCompare(b.start) || a.title.localeCompare(b.title, "zh-Hant"));
     const groups = new Map();
     rows.forEach((row) => {
@@ -1419,7 +1614,7 @@
     });
 
     eventsEl.hidden = false;
-    eventsTitle.textContent = county + "・這週活動";
+    eventsTitle.textContent = placeHeading(county) + "・這週活動";
     eventsRange.textContent = formatDay(week.start) + "–" + formatDay(week.end) + "（週一至週日）";
     eventsCredit.textContent = creditLine(data);
 
@@ -1450,6 +1645,7 @@
     const empty = rows.length === 0;
     eventsEmpty.hidden = !empty;
     eventsEmpty.textContent = "這週暫無活動資料";
+    showWiden(eventsWiden, empty);
     eventsTabs.hidden = empty;
     if (!empty && state.eventsTab === "全部") {
       categories.forEach((category) => {
@@ -1484,8 +1680,13 @@
     return url.href;
   }
 
-  function stayLinksFor(county) {
-    const query = placeQuery(county);
+  function townSearchWord(town) {
+    if (town.place === "小琉球" || town.place === "綠島" || town.place === "蘭嶼") return town.place;
+    return town.name.replaceAll("臺", "台");
+  }
+
+  function stayLinksFor(county, town) {
+    const query = town ? townSearchWord(town) : placeQuery(county);
     const start = taipeiISODate(new Date());
     const end = shiftISO(start, 1);
     const agoda = AGODA_PLACE[county] || ["city", ""];
@@ -1528,9 +1729,9 @@
     ];
   }
 
-  function renderStay(county) {
+  function renderStay(county, town) {
     stayLinks.replaceChildren();
-    stayLinksFor(county).forEach((item) => {
+    stayLinksFor(county, town || null).forEach((item) => {
       const link = document.createElement("a");
       link.className = "stay-link";
       link.href = item[1];
@@ -1577,13 +1778,15 @@
 
   function renderSpots(county) {
     const data = state.spotData;
-    const rows = ((data && data.spots) || []).filter((spot) => spot.county === county);
+    const town = activeTown();
+    const rows = ((data && data.spots) || []).filter((spot) => spot.county === county && (!town || rowMatchesTown(spot, town)));
     const visible = state.spotsExpanded ? rows : rows.slice(0, 12);
     spotsList.replaceChildren();
     visible.forEach((row) => spotsList.appendChild(spotCard(row)));
     const empty = !rows.length;
     spotsEmpty.hidden = !empty;
     spotsEmpty.textContent = data || state.spotFailed ? "暫無景點資料" : "景點資料載入中";
+    showWiden(spotsWiden, empty && Boolean(data || state.spotFailed));
     spotsList.hidden = empty;
     spotsMore.hidden = empty || rows.length <= 12 || state.spotsExpanded;
     spotsMore.textContent = "顯示更多（" + rows.length + "）";
@@ -1610,14 +1813,15 @@
 
   function showPlace(county) {
     if (!county || state.spinning) return;
-    if (state.eventsCounty !== county) {
+    if (state.eventsCounty !== county || state.placeTown) {
       state.eventsTab = "全部";
       state.spotsExpanded = false;
     }
+    state.placeTown = "";
     state.eventsCounty = county;
     if (lookupEl.value !== county) lookupEl.value = county;
     const paint = () => {
-      if (state.spinning || state.eventsCounty !== county) return;
+      if (state.spinning || state.eventsCounty !== county || state.placeTown) return;
       eventsEl.hidden = false;
       renderEvents(county);
       renderSpots(county);
@@ -1645,8 +1849,48 @@
     Promise.all([state.eventsPromise, state.spotPromise]).then(paint);
   }
 
+  function showTown(town) {
+    if (!town || state.spinning) return;
+    if (state.placeTown !== town.id) {
+      state.eventsTab = "全部";
+      state.spotsExpanded = false;
+    }
+    state.placeTown = town.id;
+    state.eventsCounty = town.place;
+    const paint = () => {
+      if (state.spinning || state.placeTown !== town.id) return;
+      eventsEl.hidden = false;
+      renderEvents(town.place);
+      renderSpots(town.place);
+      renderStay(town.place, town);
+    };
+    if ((state.eventsData || state.eventsFailed) && (state.spotData || state.spotFailed)) {
+      paint();
+      return;
+    }
+    eventsEl.hidden = false;
+    eventsTitle.textContent = town.county + town.name;
+    eventsRange.textContent = "";
+    if (!state.eventsData && !state.eventsFailed) {
+      eventsTabs.replaceChildren();
+      eventsList.replaceChildren();
+      eventsEmpty.hidden = false;
+      eventsEmpty.textContent = "活動資料載入中";
+      eventsCredit.textContent = "";
+      eventsWiden.hidden = true;
+    }
+    if (!state.spotData && !state.spotFailed) {
+      spotsList.replaceChildren();
+      spotsEmpty.hidden = false;
+      spotsEmpty.textContent = "景點資料載入中";
+      spotsWiden.hidden = true;
+    }
+    Promise.all([state.eventsPromise, state.spotPromise]).then(paint);
+  }
+
   function hideEvents() {
     state.eventsCounty = "";
+    state.placeTown = "";
     state.spotsExpanded = false;
     eventsEl.hidden = true;
     if (lookupEl.value) lookupEl.value = "";
@@ -1670,19 +1914,24 @@
       statusEl.textContent = "地圖載入失敗，請重新整理";
       return;
     }
-    const [response, islandResponse] = await Promise.all([
+    const [response, islandResponse, townResponse] = await Promise.all([
       fetch("./data/counties-10t.json"),
       fetch("./data/islands.json"),
+      fetch("./data/towns-10t.json"),
     ]);
     if (!response.ok) throw new Error("map data " + response.status);
     if (!islandResponse.ok) throw new Error("island data " + islandResponse.status);
+    if (!townResponse.ok) throw new Error("town data " + townResponse.status);
     const topo = await response.json();
     const islands = await islandResponse.json();
+    const townTopo = await townResponse.json();
     state.counties = buildCounties(topo, islands);
+    state.towns = buildTowns(townTopo, islands);
+    if (state.towns.length < 300) throw new Error("鄉鎮市區數量不對");
     statusEl.remove();
     syncControls();
     scheduleRender();
-    state.eventsPromise = fetch("./data/events.json?v=12", { cache: "no-cache" })
+    state.eventsPromise = fetch("./data/events.json?v=13", { cache: "no-cache" })
       .then((response) => (response.ok ? response.json() : null))
       .then((data) => {
         state.eventsData = data && Array.isArray(data.events) ? data : null;
@@ -1694,7 +1943,7 @@
         state.eventsFailed = true;
         return null;
       });
-    state.spotPromise = fetch("./data/spots.json?v=12", { cache: "no-cache" })
+    state.spotPromise = fetch("./data/spots.json?v=13", { cache: "no-cache" })
       .then((spotResponse) => (spotResponse.ok ? spotResponse.json() : null))
       .then((data) => {
         state.spotData = data && Array.isArray(data.spots) ? data : null;
@@ -1720,6 +1969,31 @@
       hint.textContent = "抽獎沒有完成，請再試一次";
     });
   });
+  townToggle.addEventListener("change", () => {
+    if (state.spinning) {
+      townToggle.checked = state.townMode;
+      return;
+    }
+    state.townMode = townToggle.checked;
+    try {
+      localStorage.setItem("tml-towns", state.townMode ? "1" : "0");
+    } catch (error) {
+      /* private mode can reject storage; the switch still works this visit */
+    }
+    if (state.svg) state.svg.classList.toggle("is-towns", state.townMode);
+    applyCountyStyles();
+    syncControls();
+  });
+  eventsWiden.addEventListener("click", () => {
+    const town = activeTown();
+    if (!town || state.spinning) return;
+    showPlace(town.place);
+  });
+  spotsWiden.addEventListener("click", () => {
+    const town = activeTown();
+    if (!town || state.spinning) return;
+    showPlace(town.place);
+  });
   lookupEl.addEventListener("change", () => {
     if (state.spinning) return;
     if (!lookupEl.value) {
@@ -1739,6 +2013,16 @@
   });
   mapEl.addEventListener("click", (event) => {
     if (state.spinning) return;
+    if (state.townMode) {
+      const townNode = event.target.closest("[data-town]");
+      if (!townNode || !mapEl.contains(townNode)) return;
+      const town = state.towns.find((item) => item.id === townNode.getAttribute("data-town"));
+      if (!town) return;
+      state.frameId = town.id;
+      paintFrame(town.id, 0);
+      showTown(town);
+      return;
+    }
     const node = event.target.closest("[data-name]");
     if (!node || !mapEl.contains(node)) return;
     const name = node.getAttribute("data-name");
@@ -1750,6 +2034,13 @@
     applyCountyStyles();
     syncControls();
   });
+
+  try {
+    townToggle.checked = localStorage.getItem("tml-towns") === "1";
+  } catch (error) {
+    townToggle.checked = false;
+  }
+  state.townMode = townToggle.checked;
 
   init().catch((error) => {
     console.error(error);

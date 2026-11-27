@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { loadTownIndex, matchTown, normPlace } from "./towns.mjs";
 
 const execFileAsync = promisify(execFile);
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -132,7 +133,7 @@ async function downloadJson() {
   return data;
 }
 
-function collect(data) {
+function collect(data, towns) {
   const grouped = new Map();
   let skipped = 0;
   for (const item of data.Attractions) {
@@ -153,10 +154,11 @@ function collect(data) {
     const images = Array.isArray(item.Images) ? item.Images : [];
     const picture = images.map((image) => safeHttp(image && image.URL)).find(Boolean) || "";
     const website = safeHttp(item.WebsiteURL);
+    const canonical = matchTown([town, address, name].join(" "), county, towns) || normPlace(town);
     const spot = {
       name,
       description: shortText(item.Description),
-      town,
+      town: canonical,
       address,
       picture,
       website,
@@ -187,7 +189,8 @@ function collect(data) {
 
 async function main() {
   const data = await downloadJson();
-  const { spots, skipped } = collect(data);
+  const towns = loadTownIndex();
+  const { spots, skipped } = collect(data, towns);
   if (spots.length < 100) throw new Error("only " + spots.length + " scenic spots");
   const payload = {
     updated: taipeiStamp(),
@@ -197,7 +200,9 @@ async function main() {
   await writeFile(OUT, JSON.stringify(payload) + "\n");
   const counts = {};
   for (const spot of spots) counts[spot.county] = (counts[spot.county] || 0) + 1;
+  const withTown = spots.filter((spot) => spot.town).length;
   console.log("source spots " + data.Attractions.length + ", kept " + spots.length + ", unmapped " + skipped);
+  console.log("town matched " + withTown + " / " + spots.length);
   console.log(Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([name, n]) => name + " " + n).join(", "));
 }
 

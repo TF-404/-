@@ -260,13 +260,41 @@ body {
 
 .spot-glow {
   stroke: rgba(255, 255, 255, 0.42);
-  stroke-width: 4.5px;
+  stroke-width: 2.5px;
 }
 
 .spot-core {
   stroke: #ffffff;
-  stroke-width: 2px;
+  stroke-width: 1.25px;
 }
+
+.map-svg.is-towns .spot-glow { stroke-width: 2px; }
+.map-svg.is-towns .spot-core { stroke-width: 1px; }
+
+.town {
+  fill: transparent;
+  stroke: rgba(232, 242, 255, 0.5);
+  stroke-width: 0.8px;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.map-svg:not(.is-towns) .towns { display: none; }
+
+.map-svg.is-towns:not(.is-spinning) .town {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.map-svg.is-towns .town:hover {
+  stroke: rgba(255, 255, 255, 0.95);
+  stroke-width: 1.35px;
+}
+
+.map-svg.is-spinning .town { pointer-events: none; }
+
+.town.is-spent { stroke: rgba(232, 242, 255, 0.16); }
 
 .panel {
   display: flex;
@@ -346,17 +374,47 @@ body {
   flex: none;
   height: 40px;
   min-height: 40px;
+  max-height: 40px;
   margin-top: 14px;
+}
+
+.switches {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+@media (min-width: 861px) {
+  .controls {
+    height: 76px;
+    min-height: 76px;
+    max-height: 76px;
+    align-items: flex-start;
+  }
+
+  .switches {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
 }
 
 .switch {
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  min-width: 0;
   cursor: pointer;
   user-select: none;
   font-weight: 700;
+}
+
+.switch-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .switch input {
@@ -530,7 +588,11 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+  overflow: hidden;
   font-weight: 700;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .swatch {
@@ -624,11 +686,19 @@ body {
     border-radius: 12px;
   }
 
-  .controls { margin-top: 10px; }
+  .controls { margin-top: 10px; gap: 8px; }
+  .switches { gap: 8px; }
+  .switch { gap: 5px; font-size: 0.78rem; }
+  .track { width: 38px; height: 22px; }
+  .thumb { width: 16px; height: 16px; }
+  .switch input:checked + .track .thumb { transform: translateX(18px); }
   .history-title { margin-top: 12px; }
 
-  .spot-glow { stroke-width: 3.5px; }
-  .spot-core { stroke-width: 1.5px; }
+  .spot-glow { stroke-width: 2px; }
+  .spot-core { stroke-width: 1px; }
+  .map-svg.is-towns .spot-glow { stroke-width: 1.75px; }
+  .map-svg.is-towns .spot-core { stroke-width: 0.9px; }
+  .town { stroke-width: 0.7px; }
 }
 
 @media (hover: none) {
@@ -744,6 +814,19 @@ a.event:focus-visible {
   font-size: 1rem;
   font-weight: 700;
   line-height: 1.45;
+}
+
+.event-source {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 0 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(224, 177, 90, 0.45);
+  color: #e0b15a;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.7;
 }
 
 .event-go {
