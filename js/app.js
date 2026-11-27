@@ -75,6 +75,16 @@
   const eventsList = document.getElementById("events-list");
   const eventsEmpty = document.getElementById("events-empty");
   const eventsCredit = document.getElementById("events-credit");
+  const lookupEl = document.getElementById("lookup");
+  const paneEvents = document.getElementById("pane-events");
+  const paneSpots = document.getElementById("pane-spots");
+  const paneStay = document.getElementById("pane-stay");
+  const placeTabs = document.getElementById("place-tabs");
+  const spotsList = document.getElementById("spots-list");
+  const spotsMore = document.getElementById("spots-more");
+  const spotsEmpty = document.getElementById("spots-empty");
+  const spotsCredit = document.getElementById("spots-credit");
+  const stayLinks = document.getElementById("stay-links");
 
   const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
 
@@ -111,6 +121,11 @@
     eventsCounty: "",
     eventsTab: "全部",
     eventsPromise: null,
+    spotData: null,
+    spotFailed: false,
+    spotPromise: null,
+    placePane: "events",
+    spotsExpanded: false,
   };
 
   function officialName(raw) {
@@ -1060,6 +1075,7 @@
     drawBtn.disabled = blocked || !state.counties.length;
     resetBtn.disabled = state.spinning || state.history.length === 0;
     norepeat.disabled = state.spinning;
+    lookupEl.disabled = state.spinning;
     if (state.spinning) setDrawFace("spin");
     else if (eligible.length === 0) setDrawFace("done");
     else if (state.history.length) setDrawFace("again");
@@ -1198,8 +1214,65 @@
       state.renderDeferred = false;
       scheduleRender();
     }
-    showCountyEvents(winner.name);
+    showPlace(winner.name);
   }
+
+  const PLACE_QUERY = {
+    基隆市: "基隆",
+    臺北市: "台北",
+    新北市: "新北市板橋",
+    桃園市: "桃園",
+    新竹市: "新竹市",
+    新竹縣: "新竹",
+    苗栗縣: "苗栗",
+    臺中市: "台中",
+    彰化縣: "彰化",
+    南投縣: "南投",
+    雲林縣: "雲林",
+    嘉義市: "嘉義",
+    嘉義縣: "嘉義",
+    臺南市: "台南",
+    高雄市: "高雄",
+    屏東縣: "屏東",
+    宜蘭縣: "宜蘭",
+    花蓮縣: "花蓮",
+    臺東縣: "台東",
+    澎湖縣: "澎湖",
+    金門縣: "金門",
+    連江縣: "馬祖",
+    小琉球: "小琉球",
+    綠島: "綠島",
+    蘭嶼: "蘭嶼",
+  };
+
+  /* Agoda place ids checked against Taiwan suggestions. Areas use area=, cities use city=. */
+  const AGODA_PLACE = {
+    基隆市: ["city", 17048],
+    臺北市: ["city", 4951],
+    新北市: ["area", 80303],
+    桃園市: ["city", 8453],
+    新竹市: ["city", 24517],
+    新竹縣: ["city", 12711],
+    苗栗縣: ["city", 287008],
+    臺中市: ["city", 12080],
+    彰化縣: ["city", 18341],
+    南投縣: ["city", 18346],
+    雲林縣: ["city", 18352],
+    嘉義市: ["city", 11977],
+    嘉義縣: ["city", 11977],
+    臺南市: ["city", 18347],
+    高雄市: ["city", 756],
+    屏東縣: ["city", 11459],
+    宜蘭縣: ["city", 88773],
+    花蓮縣: ["city", 23127],
+    臺東縣: ["city", 4740],
+    澎湖縣: ["city", 106001],
+    金門縣: ["city", 286060],
+    連江縣: ["city", 702190],
+    小琉球: ["city", 702189],
+    綠島: ["city", 702188],
+    蘭嶼: ["area", 595069],
+  };
 
   function taipeiISODate(date) {
     return new Intl.DateTimeFormat("en-CA", {
@@ -1373,31 +1446,180 @@
     }
   }
 
-  function showCountyEvents(county) {
+  function placeQuery(county) {
+    return PLACE_QUERY[county] || county;
+  }
+
+  function withParams(base, params) {
+    const url = new URL(base);
+    Object.keys(params).forEach((key) => url.searchParams.set(key, params[key]));
+    return url.href;
+  }
+
+  function stayLinksFor(county) {
+    const query = placeQuery(county);
+    const start = taipeiISODate(new Date());
+    const end = shiftISO(start, 1);
+    const agoda = AGODA_PLACE[county] || ["city", ""];
+    const agodaParams = {
+      checkIn: start,
+      checkOut: end,
+      los: "1",
+      rooms: "1",
+      adults: "2",
+      children: "0",
+    };
+    agodaParams[agoda[0]] = String(agoda[1]);
+    return [
+      ["Trip.com 住宿", withParams("https://tw.trip.com/hotels/list", {
+        locale: "zh-TW",
+        curr: "TWD",
+        checkin: start,
+        checkout: end,
+        crn: "1",
+        adult: "2",
+        children: "0",
+        searchWord: query,
+        searchType: "CT",
+      })],
+      ["Booking.com", withParams("https://www.booking.com/searchresults.zh-tw.html", {
+        ss: query,
+        checkin: start,
+        checkout: end,
+        group_adults: "2",
+        no_rooms: "1",
+        group_children: "0",
+        lang: "zh-tw",
+      })],
+      ["Agoda", withParams("https://www.agoda.com/zh-tw/search", agodaParams)],
+      ["Trip.com 租車", withParams("https://tw.trip.com/carhire/", {
+        locale: "zh-TW",
+        keyword: query,
+      })],
+      ["和運租車", "https://www.easyrent.com.tw/rent-service.html"],
+    ];
+  }
+
+  function renderStay(county) {
+    stayLinks.replaceChildren();
+    stayLinksFor(county).forEach((item) => {
+      const link = document.createElement("a");
+      link.className = "stay-link";
+      link.href = item[1];
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      const hint = document.createElement("span");
+      hint.textContent = "↗";
+      link.replaceChildren(document.createTextNode(item[0]), hint);
+      stayLinks.appendChild(link);
+    });
+  }
+
+  function spotCard(row) {
+    const href = safeUrl(row.website) || safeUrl(row.map);
+    const card = document.createElement("a");
+    card.className = "event spot-card";
+    card.href = href || ("https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(row.name + " " + (row.address || "")));
+    card.target = "_blank";
+    card.rel = "noopener noreferrer";
+    if (safeUrl(row.picture)) {
+      const img = document.createElement("img");
+      img.src = safeUrl(row.picture);
+      img.alt = "";
+      card.appendChild(img);
+    }
+    const heading = document.createElement("h3");
+    heading.textContent = row.name;
+    const meta = document.createElement("p");
+    meta.textContent = row.address || row.town || "";
+    card.append(heading, meta);
+    if (row.description) {
+      const about = document.createElement("p");
+      about.textContent = row.description;
+      card.appendChild(about);
+    }
+    const go = document.createElement("span");
+    go.className = "event-go";
+    go.textContent = safeUrl(row.website) ? "查看景點 ↗" : "地圖 ↗";
+    card.appendChild(go);
+    return card;
+  }
+
+  function renderSpots(county) {
+    const data = state.spotData;
+    const rows = ((data && data.spots) || []).filter((spot) => spot.county === county);
+    const visible = state.spotsExpanded ? rows : rows.slice(0, 12);
+    spotsList.replaceChildren();
+    visible.forEach((row) => spotsList.appendChild(spotCard(row)));
+    const empty = !rows.length;
+    spotsEmpty.hidden = !empty;
+    spotsEmpty.textContent = data || state.spotFailed ? "暫無景點資料" : "景點資料載入中";
+    spotsList.hidden = empty;
+    spotsMore.hidden = empty || rows.length <= 12 || state.spotsExpanded;
+    spotsMore.textContent = "顯示更多（" + rows.length + "）";
+    if (!data) {
+      spotsCredit.textContent = state.spotFailed ? "景點資料暫時無法載入" : "";
+      return;
+    }
+    const when = formatUpdated(data.updated);
+    const source = (data.source && data.source.name) || "交通部觀光署景點開放資料";
+    spotsCredit.textContent = "資料來源：" + source + (when ? " · 更新於 " + when : "");
+  }
+
+  function setPlacePane(name) {
+    state.placePane = name;
+    paneEvents.hidden = name !== "events";
+    paneSpots.hidden = name !== "spots";
+    paneStay.hidden = name !== "stay";
+    placeTabs.querySelectorAll("[data-pane]").forEach((button) => {
+      const on = button.getAttribute("data-pane") === name;
+      button.classList.toggle("is-on", on);
+      button.setAttribute("aria-selected", on ? "true" : "false");
+    });
+  }
+
+  function showPlace(county) {
+    if (!county || state.spinning) return;
+    if (state.eventsCounty !== county) {
+      state.eventsTab = "全部";
+      state.spotsExpanded = false;
+    }
     state.eventsCounty = county;
-    state.eventsTab = "全部";
+    if (lookupEl.value !== county) lookupEl.value = county;
     const paint = () => {
       if (state.spinning || state.eventsCounty !== county) return;
+      eventsEl.hidden = false;
       renderEvents(county);
+      renderSpots(county);
+      renderStay(county);
     };
-    if (state.eventsData || state.eventsFailed) {
+    if ((state.eventsData || state.eventsFailed) && (state.spotData || state.spotFailed)) {
       paint();
       return;
     }
     eventsEl.hidden = false;
-    eventsTitle.textContent = county + "・這週活動";
+    eventsTitle.textContent = county;
     eventsRange.textContent = "";
-    eventsTabs.replaceChildren();
-    eventsList.replaceChildren();
-    eventsEmpty.hidden = false;
-    eventsEmpty.textContent = "活動資料載入中";
-    eventsCredit.textContent = "";
-    state.eventsPromise.then(paint);
+    if (!state.eventsData && !state.eventsFailed) {
+      eventsTabs.replaceChildren();
+      eventsList.replaceChildren();
+      eventsEmpty.hidden = false;
+      eventsEmpty.textContent = "活動資料載入中";
+      eventsCredit.textContent = "";
+    }
+    if (!state.spotData && !state.spotFailed) {
+      spotsList.replaceChildren();
+      spotsEmpty.hidden = false;
+      spotsEmpty.textContent = "景點資料載入中";
+    }
+    Promise.all([state.eventsPromise, state.spotPromise]).then(paint);
   }
 
   function hideEvents() {
     state.eventsCounty = "";
+    state.spotsExpanded = false;
     eventsEl.hidden = true;
+    if (lookupEl.value) lookupEl.value = "";
   }
 
   function resetAll() {
@@ -1430,7 +1652,7 @@
     statusEl.remove();
     syncControls();
     scheduleRender();
-    state.eventsPromise = fetch("./data/events.json?v=10", { cache: "no-cache" })
+    state.eventsPromise = fetch("./data/events.json?v=11", { cache: "no-cache" })
       .then((response) => (response.ok ? response.json() : null))
       .then((data) => {
         state.eventsData = data && Array.isArray(data.events) ? data : null;
@@ -1440,6 +1662,18 @@
       .catch(() => {
         state.eventsData = null;
         state.eventsFailed = true;
+        return null;
+      });
+    state.spotPromise = fetch("./data/spots.json?v=11", { cache: "no-cache" })
+      .then((spotResponse) => (spotResponse.ok ? spotResponse.json() : null))
+      .then((data) => {
+        state.spotData = data && Array.isArray(data.spots) ? data : null;
+        state.spotFailed = !state.spotData;
+        return state.spotData;
+      })
+      .catch(() => {
+        state.spotData = null;
+        state.spotFailed = true;
         return null;
       });
     const observer = new ResizeObserver(scheduleRender);
@@ -1455,6 +1689,31 @@
       syncControls();
       hint.textContent = "抽獎沒有完成，請再試一次";
     });
+  });
+  lookupEl.addEventListener("change", () => {
+    if (state.spinning) return;
+    if (!lookupEl.value) {
+      hideEvents();
+      return;
+    }
+    showPlace(lookupEl.value);
+  });
+  placeTabs.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-pane]");
+    if (!button) return;
+    setPlacePane(button.getAttribute("data-pane"));
+  });
+  spotsMore.addEventListener("click", () => {
+    state.spotsExpanded = true;
+    if (state.eventsCounty) renderSpots(state.eventsCounty);
+  });
+  mapEl.addEventListener("click", (event) => {
+    if (state.spinning) return;
+    const node = event.target.closest("[data-name]");
+    if (!node || !mapEl.contains(node)) return;
+    const name = node.getAttribute("data-name");
+    if (!name || ![...lookupEl.options].some((option) => option.value === name)) return;
+    showPlace(name);
   });
   resetBtn.addEventListener("click", resetAll);
   norepeat.addEventListener("change", () => {

@@ -193,6 +193,8 @@ body {
   cursor: default;
 }
 
+.map-svg:not(.is-spinning) .county { cursor: pointer; }
+
 .map-svg:not(.is-spinning) .county:hover {
   filter: brightness(1.14);
 }
@@ -435,10 +437,46 @@ body {
   line-height: 1.5em;
 }
 
+.lookup {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  min-height: 40px;
+  max-height: 40px;
+  margin-top: 10px;
+}
+
+.lookup span {
+  flex: none;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.lookup select {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  margin: 0;
+  padding: 0 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: #101826;
+  color: #f4f7fb;
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.lookup select:disabled { opacity: 0.55; }
+
 .history-title {
   flex: none;
   height: 1.2em;
-  margin: 16px 0 8px;
+  margin: 12px 0 8px;
   overflow: hidden;
   font-size: 0.78rem;
   font-weight: 700;
@@ -738,7 +776,73 @@ a.event:focus-visible {
   line-height: 1.5;
 }
 
+.spot-card img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.spots-more {
+  display: block;
+  height: 40px;
+  margin: 8px auto 0;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: transparent;
+  color: #e0b15a;
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.spots-more[hidden] { display: none !important; }
+
+.stay-note {
+  margin: 0 0 12px;
+  color: #9aafc4;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.stay-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.stay-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 48px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.03);
+  color: #f4f7fb;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.stay-link span { color: #e0b15a; }
+
+.stay-link:hover,
+.stay-link:focus-visible {
+  border-color: #e0b15a;
+  background: rgba(224, 177, 90, 0.1);
+  outline: 2px solid #e0b15a;
+  outline-offset: 2px;
+}
+
 @media (min-width: 861px) {
   .events { padding: 22px 28px 40px; }
   .event-cards { grid-template-columns: 1fr 1fr; }
+  .stay-grid { grid-template-columns: 1fr 1fr; }
 }
