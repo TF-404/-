@@ -1751,13 +1751,47 @@
     card.href = href || ("https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(row.name + " " + (row.address || "")));
     card.target = "_blank";
     card.rel = "noopener noreferrer";
-    if (safeUrl(row.picture)) {
+    const large = safeUrl(row.picture);
+    const small = safeUrl(row.pictureSm);
+    if (large) {
+      const frame = document.createElement("div");
+      frame.className = "spot-photo";
       const img = document.createElement("img");
-      img.src = safeUrl(row.picture);
+      const width = Number(row.pictureW) || 0;
       img.alt = "";
       img.loading = "lazy";
-      img.addEventListener("error", () => img.remove());
-      card.appendChild(img);
+      img.decoding = "async";
+      img.addEventListener("load", () => {
+        if (img.getAttribute("srcset")) return;
+        const apply = () => {
+          const natural = img.naturalWidth;
+          if (!natural || !frame.isConnected) return;
+          if (!frame.clientWidth) {
+            requestAnimationFrame(apply);
+            return;
+          }
+          if (natural < frame.clientWidth) img.classList.add("is-lowres");
+          if (natural < 600) frame.classList.add("is-soft");
+        };
+        apply();
+      });
+      let fellBack = false;
+      img.addEventListener("error", () => {
+        if (!fellBack && small && small !== large) {
+          fellBack = true;
+          img.removeAttribute("srcset");
+          img.src = small;
+          return;
+        }
+        frame.remove();
+      });
+      if (small && small !== large && width >= 800) {
+        img.srcset = small + " 640w, " + large + " " + width + "w";
+        img.sizes = "(max-width: 860px) 280px, 800px";
+      }
+      img.src = large;
+      frame.appendChild(img);
+      card.appendChild(frame);
     }
     const heading = document.createElement("h3");
     heading.textContent = row.name;
@@ -1931,7 +1965,7 @@
     statusEl.remove();
     syncControls();
     scheduleRender();
-    state.eventsPromise = fetch("./data/events.json?v=13", { cache: "no-cache" })
+    state.eventsPromise = fetch("./data/events.json?v=14", { cache: "no-cache" })
       .then((response) => (response.ok ? response.json() : null))
       .then((data) => {
         state.eventsData = data && Array.isArray(data.events) ? data : null;
@@ -1943,7 +1977,7 @@
         state.eventsFailed = true;
         return null;
       });
-    state.spotPromise = fetch("./data/spots.json?v=13", { cache: "no-cache" })
+    state.spotPromise = fetch("./data/spots.json?v=14", { cache: "no-cache" })
       .then((spotResponse) => (spotResponse.ok ? spotResponse.json() : null))
       .then((data) => {
         state.spotData = data && Array.isArray(data.spots) ? data : null;

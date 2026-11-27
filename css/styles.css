@@ -859,14 +859,36 @@ a.event:focus-visible {
   line-height: 1.5;
 }
 
-.spot-card img {
-  display: block;
+.spot-photo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 100%;
   aspect-ratio: 16 / 9;
-  object-fit: cover;
-  border-radius: 8px;
   margin-bottom: 8px;
+  border-radius: 8px;
+  overflow: hidden;
   background: rgba(255, 255, 255, 0.04);
+}
+
+.spot-photo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.spot-photo img.is-lowres {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.spot-photo.is-soft {
+  background:
+    radial-gradient(ellipse at center, rgba(232, 242, 255, 0.1), rgba(255, 255, 255, 0.03) 70%);
 }
 
 .spots-more {

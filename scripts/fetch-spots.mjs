@@ -99,6 +99,49 @@ function shortText(value) {
   return text.slice(0, 89) + "…";
 }
 
+function picturePair(url) {
+  if (!url) return { picture: "", pictureSm: "", pictureW: 0 };
+  const imagePath = url.match(/^(https?:\/\/[^/?#]+)\/image\/(\d+)\/\d+x\d+\/?$/);
+  if (imagePath) {
+    return {
+      picture: imagePath[1] + "/image/" + imagePath[2] + "/1024x768",
+      pictureSm: imagePath[1] + "/image/" + imagePath[2] + "/640x480",
+      pictureW: 1024,
+    };
+  }
+  if (url.includes("/640x480_")) {
+    return {
+      picture: url.replace("/640x480_", "/1920x1080_"),
+      pictureSm: url,
+      pictureW: 1600,
+    };
+  }
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch (error) {
+    return { picture: url, pictureSm: "", pictureW: 0 };
+  }
+  if (parsed.searchParams.has("sizetype")) {
+    const large = new URL(url);
+    const small = new URL(url);
+    large.searchParams.set("sizetype", "3");
+    small.searchParams.set("sizetype", "2");
+    return { picture: large.href, pictureSm: small.href, pictureW: 1024 };
+  }
+  if (parsed.searchParams.has("w")) {
+    const current = Number(parsed.searchParams.get("w"));
+    if (Number.isFinite(current) && current < 1200) {
+      const large = new URL(url);
+      const small = new URL(url);
+      large.searchParams.set("w", "1600");
+      if (!(current >= 480)) small.searchParams.set("w", "640");
+      return { picture: large.href, pictureSm: small.href, pictureW: 1200 };
+    }
+  }
+  return { picture: url, pictureSm: "", pictureW: 0 };
+}
+
 function mapLink(name, address, lat, lon) {
   const latitude = Number(lat);
   const longitude = Number(lon);
@@ -152,7 +195,8 @@ function collect(data, towns) {
       continue;
     }
     const images = Array.isArray(item.Images) ? item.Images : [];
-    const picture = images.map((image) => safeHttp(image && image.URL)).find(Boolean) || "";
+    const rawPicture = images.map((image) => safeHttp(image && image.URL)).find(Boolean) || "";
+    const photo = picturePair(rawPicture);
     const website = safeHttp(item.WebsiteURL);
     const canonical = matchTown([town, address, name].join(" "), county, towns) || normPlace(town);
     const spot = {
@@ -160,10 +204,14 @@ function collect(data, towns) {
       description: shortText(item.Description),
       town: canonical,
       address,
-      picture,
+      picture: photo.picture,
       website,
       map: mapLink(name, address, item.PositionLat, item.PositionLon),
     };
+    if (photo.pictureSm && photo.pictureSm !== photo.picture) {
+      spot.pictureSm = photo.pictureSm;
+      spot.pictureW = photo.pictureW;
+    }
     if (!grouped.has(county)) grouped.set(county, []);
     grouped.get(county).push(spot);
   }
@@ -201,8 +249,11 @@ async function main() {
   const counts = {};
   for (const spot of spots) counts[spot.county] = (counts[spot.county] || 0) + 1;
   const withTown = spots.filter((spot) => spot.town).length;
+  const withPicture = spots.filter((spot) => spot.picture).length;
+  const withVariant = spots.filter((spot) => spot.pictureSm).length;
   console.log("source spots " + data.Attractions.length + ", kept " + spots.length + ", unmapped " + skipped);
   console.log("town matched " + withTown + " / " + spots.length);
+  console.log("picture variants " + withVariant + " / " + withPicture);
   console.log(Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([name, n]) => name + " " + n).join(", "));
 }
 
