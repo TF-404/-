@@ -1,0 +1,39 @@
+name: Update events
+
+on:
+  schedule:
+    # 18:00 UTC is 02:00 in Asia/Taipei.
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-events
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Fetch public event listings
+        run: node scripts/fetch-events.mjs
+
+      - name: Commit data/events.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/events.json
+          if git diff --cached --quiet; then
+            echo "events.json unchanged"
+            exit 0
+          fi
+          git commit -m "Update weekly event open data"
+          git push

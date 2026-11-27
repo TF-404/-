@@ -68,6 +68,13 @@
   const norepeat = document.getElementById("norepeat");
   const hint = document.getElementById("hint");
   const historyEl = document.getElementById("history");
+  const eventsEl = document.getElementById("events");
+  const eventsTitle = document.getElementById("events-title");
+  const eventsRange = document.getElementById("events-range");
+  const eventsTabs = document.getElementById("events-tabs");
+  const eventsList = document.getElementById("events-list");
+  const eventsEmpty = document.getElementById("events-empty");
+  const eventsCredit = document.getElementById("events-credit");
 
   const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
 
@@ -99,6 +106,11 @@
     nodes: new Map(),
     renderQueued: false,
     paths: null,
+    eventsData: null,
+    eventsFailed: false,
+    eventsCounty: "",
+    eventsTab: "全部",
+    eventsPromise: null,
   };
 
   function officialName(raw) {
@@ -1186,6 +1198,192 @@
       state.renderDeferred = false;
       scheduleRender();
     }
+    showCountyEvents(winner.name);
+  }
+
+  function taipeiISODate(date) {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Taipei",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(date);
+  }
+
+  function shiftISO(iso, days) {
+    const parts = iso.split("-").map(Number);
+    const dt = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2] + days));
+    return dt.toISOString().slice(0, 10);
+  }
+
+  function currentWeek(date) {
+    const today = taipeiISODate(date || new Date());
+    const parts = today.split("-").map(Number);
+    const weekday = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2])).getUTCDay();
+    const mondayOffset = weekday === 0 ? -6 : 1 - weekday;
+    const start = shiftISO(today, mondayOffset);
+    return { start: start, end: shiftISO(start, 6) };
+  }
+
+  function formatDay(iso) {
+    return String(iso || "").replaceAll("-", "/");
+  }
+
+  function formatSpan(start, end) {
+    if (!end || start === end) return formatDay(start);
+    if (start.slice(0, 4) === end.slice(0, 4)) {
+      return formatDay(start) + "–" + end.slice(5).replaceAll("-", "/");
+    }
+    return formatDay(start) + "–" + formatDay(end);
+  }
+
+  function formatUpdated(stamp) {
+    const match = String(stamp || "").match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+    if (!match) return "";
+    return match[1] + "/" + match[2] + "/" + match[3] + " " + match[4] + ":" + match[5];
+  }
+
+  function safeUrl(value) {
+    try {
+      const url = new URL(String(value || ""));
+      if (url.protocol === "http:" || url.protocol === "https:") return url.href;
+    } catch (error) {
+      return "";
+    }
+    return "";
+  }
+
+  function eventCard(row) {
+    const card = document.createElement("article");
+    card.className = "event";
+    const heading = document.createElement("h3");
+    const href = safeUrl(row.url);
+    if (href) {
+      const link = document.createElement("a");
+      link.href = href;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = row.title;
+      heading.appendChild(link);
+    } else {
+      heading.textContent = row.title;
+    }
+    const meta = document.createElement("p");
+    const venue = row.venue ? " · " + row.venue : "";
+    meta.textContent = formatSpan(row.start, row.end) + venue;
+    card.append(heading, meta);
+    if (row.address) {
+      const place = document.createElement("p");
+      place.textContent = row.address;
+      card.appendChild(place);
+    }
+    return card;
+  }
+
+  function creditLine(data) {
+    if (!data) return "活動資料暫時無法載入";
+    const names = (data.sources || []).map((source) => source.name).filter(Boolean);
+    const source = names.length ? names.join("、") : "文化部藝文活動開放資料";
+    const when = formatUpdated(data.updated);
+    return "資料來源：" + source + (when ? " · 更新於 " + when : "");
+  }
+
+  function renderEvents(county) {
+    const data = state.eventsData;
+    const week = currentWeek();
+    const categories = (data && data.categories) || [];
+    const rows = ((data && data.events) || []).filter((event) =>
+      event.county === county && event.start <= week.end && (event.end || event.start) >= week.start
+    );
+    rows.sort((a, b) => a.start.localeCompare(b.start) || a.title.localeCompare(b.title, "zh-Hant"));
+    const groups = new Map();
+    rows.forEach((row) => {
+      const category = categories.indexOf(row.category) >= 0 ? row.category : "其他";
+      if (!groups.has(category)) groups.set(category, []);
+      groups.get(category).push(row);
+    });
+
+    eventsEl.hidden = false;
+    eventsTitle.textContent = county + "・這週活動";
+    eventsRange.textContent = formatDay(week.start) + "–" + formatDay(week.end) + "（週一至週日）";
+    eventsCredit.textContent = creditLine(data);
+
+    const tabs = [];
+    if (rows.length) tabs.push(["全部", rows.length]);
+    categories.forEach((category) => {
+      if (groups.has(category)) tabs.push([category, groups.get(category).length]);
+    });
+    if (!tabs.some((tab) => tab[0] === state.eventsTab)) state.eventsTab = "全部";
+
+    eventsTabs.replaceChildren();
+    tabs.forEach((tab) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "events-tab" + (tab[0] === state.eventsTab ? " is-on" : "");
+      button.setAttribute("role", "tab");
+      button.setAttribute("aria-selected", tab[0] === state.eventsTab ? "true" : "false");
+      button.textContent = tab[0] + " " + tab[1];
+      button.addEventListener("click", () => {
+        if (state.spinning || state.eventsCounty !== county) return;
+        state.eventsTab = tab[0];
+        renderEvents(county);
+      });
+      eventsTabs.appendChild(button);
+    });
+
+    eventsList.replaceChildren();
+    const empty = rows.length === 0;
+    eventsEmpty.hidden = !empty;
+    eventsEmpty.textContent = "這週暫無活動資料";
+    eventsTabs.hidden = empty;
+    if (!empty && state.eventsTab === "全部") {
+      categories.forEach((category) => {
+        const groupRows = groups.get(category);
+        if (!groupRows) return;
+        const section = document.createElement("section");
+        section.className = "event-group";
+        const title = document.createElement("h3");
+        title.className = "event-group-title";
+        title.textContent = category + " " + groupRows.length;
+        const cards = document.createElement("div");
+        cards.className = "event-cards";
+        groupRows.forEach((row) => cards.appendChild(eventCard(row)));
+        section.append(title, cards);
+        eventsList.appendChild(section);
+      });
+    } else if (!empty) {
+      const cards = document.createElement("div");
+      cards.className = "event-cards";
+      (groups.get(state.eventsTab) || []).forEach((row) => cards.appendChild(eventCard(row)));
+      eventsList.appendChild(cards);
+    }
+  }
+
+  function showCountyEvents(county) {
+    state.eventsCounty = county;
+    state.eventsTab = "全部";
+    const paint = () => {
+      if (state.spinning || state.eventsCounty !== county) return;
+      renderEvents(county);
+    };
+    if (state.eventsData || state.eventsFailed) {
+      paint();
+      return;
+    }
+    eventsEl.hidden = false;
+    eventsTitle.textContent = county + "・這週活動";
+    eventsRange.textContent = "";
+    eventsTabs.replaceChildren();
+    eventsList.replaceChildren();
+    eventsEmpty.hidden = false;
+    eventsEmpty.textContent = "活動資料載入中";
+    eventsCredit.textContent = "";
+    state.eventsPromise.then(paint);
+  }
+
+  function hideEvents() {
+    state.eventsCounty = "";
+    eventsEl.hidden = true;
   }
 
   function resetAll() {
@@ -1198,6 +1396,7 @@
     applyCountyStyles();
     renderHistory();
     syncControls();
+    hideEvents();
   }
 
   async function init() {
@@ -1217,6 +1416,18 @@
     statusEl.remove();
     syncControls();
     scheduleRender();
+    state.eventsPromise = fetch("./data/events.json", { cache: "no-cache" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => {
+        state.eventsData = data && Array.isArray(data.events) ? data : null;
+        state.eventsFailed = !state.eventsData;
+        return state.eventsData;
+      })
+      .catch(() => {
+        state.eventsData = null;
+        state.eventsFailed = true;
+        return null;
+      });
     const observer = new ResizeObserver(scheduleRender);
     observer.observe(mapEl);
     window.addEventListener("resize", scheduleRender);
